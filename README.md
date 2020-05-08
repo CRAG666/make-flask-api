@@ -6,6 +6,7 @@ Cli to create rest api structure
 * This project use [Poetry](https://python-poetry.org/) as  packaging and dependency management
 * This project was created to work with [blueprints](https://flask.palletsprojects.com/en/1.1.x/blueprints/), [Pluggable Views](https://flask.palletsprojects.com/en/1.1.x/views/), [marshmallow](https://flask-marshmallow.readthedocs.io/en/latest/) and [sqlalchemy](https://flask-sqlalchemy.palletsprojects.com/en/2.x/)(Read pleace)
 * It provides a standard method to be implemented with url rule, this method allows to perform the operations based on a CRUD
+* Install [nerdfonts](https://www.nerdfonts.com)
 
 ## Install
 1 clone repositoy
