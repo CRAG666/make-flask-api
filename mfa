@@ -1,0 +1,406 @@
+#!/bin/bash
+make_pyfiles () {
+cat > .gitignore << EOF
+# Created by https://www.gitignore.io/api/python,visualstudiocode,virtualenv
+# Edit at https://www.gitignore.io/?templates=python,visualstudiocode,virtualenv
+
+### Python ###
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# pyenv
+.python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# Mr Developer
+.mr.developer.cfg
+.project
+.pydevproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+### VirtualEnv ###
+# Virtualenv
+# http://iamzed.com/2009/05/07/a-primer-on-virtualenv/
+pyvenv.cfg
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pip-selfcheck.json
+
+### VisualStudioCode ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+### VisualStudioCode Patch ###
+# Ignore all local history of files
+.history
+
+# End of https://www.gitignore.io/api/python,visualstudiocode,virtualenv
+#temporal archives
+*~
+#poetry
+poetry.lock
+#pyC
+*.pyc
+#coderuner
+tempCodeRunnerFile.py
+EOF
+
+cat > server.py << EOF
+from flask import Flask
+from config import DevelopmentConfig
+# * from flask import flash
+# * from flask import session
+# * from routes import
+# * from flask_wtf import CSRFProtect
+# * import json
+app = Flask(__name__, static_folder="public", template_folder="views")
+app.config.from_object(DevelopmentConfig)
+# ! csrf = CSRFProtect()
+# * Error 404
+@app.errorhandler(404)
+def page_not_found(err):
+    return 'Esta pagina no pudo encontrarse'
+
+# * index routes
+@app.route('/')
+def index():
+    return 'hola mundo'
+# * Routes
+EOF
+
+cat > run.py << EOF
+from server import app
+from models.all_tables import db, ma
+if __name__ == "__main__":
+    # ! csrf.init_app(app)
+    db.init_app(app)
+    ma.init_app(app)
+#    with app.app_context():
+#        db.create_all()
+    app.run()
+EOF
+
+cat > config/__init__.py << EOF
+from os import environ
+
+
+class Config:
+    SECRET_KEY = "CRAG"
+
+
+class DevelopmentConfig(Config):
+    DEBUG = True
+    SQLALCHEMY_DATABASE_URI = 'mysql://root:' + environ['passmaria'] + '@localhost/app1'
+#    SQLALCHEMY_DATABASE_URI = 'mysql://root:' + '@localhost/app1'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+EOF
+
+cat > models/__init__.py << EOF
+from flask_sqlalchemy import SQLAlchemy
+from flask_marshmallow import Marshmallow
+db = SQLAlchemy()
+ma = Marshmallow()
+
+
+class standard():
+    def save(self):
+        db.session.add(self)
+        db.session.commit()
+
+    def delete(self):
+        db.session.delete(self)
+        db.session.commit()
+EOF
+
+cat > models/all_tables.py << EOF
+from . import db, ma
+EOF
+
+cat > routes/__init__.py << EOF
+from flask import Blueprint
+EOF
+
+cat > routes/standard_methods.py << EOF
+from flask import jsonify, request, make_response
+from flask.views import MethodView
+import jwt
+from flask import current_app as app
+import datetime
+from flask_expects_json import expects_json
+
+
+class methods_api(MethodView):
+    def __init__(self, Table, TableSchema, schema):
+        self.Table = Table
+        self.Result = TableSchema()
+        self.Results = TableSchema(many=True)
+        self.put = expects_json(schema)(self.put)
+        self.add = expects_json(schema)(self.add)
+
+    def get(self, id=None):
+        rute = str(request.url_rule)
+        if id:
+            if rute.find('registry') != -1:
+                one_registry = self.Table.query.filter_by(id=id).first()
+                if one_registry:
+                    return self.Result.jsonify(one_registry)
+                return jsonify({"Message": "registro inexistente"})
+            else:
+                paginar = self.Table.query.paginate(id, 15, False)
+                result = dict(
+                    total=paginar.total,
+                    current_page=paginar.page,
+                    per_page=paginar.per_page)
+                return jsonify(
+                    {"Result": self.Results.dump(paginar.items),
+                     "metadata": result})
+        else:
+            all_registrys = self.Table.query.all()
+            print(all_registrys)
+            return self.Results.jsonify(all_registrys)
+
+    def post(self):
+        rute = str(request.url_rule)
+        if rute.find('add') != -1:
+            return self.add()
+        else:
+            auth = request.json
+
+            if not auth or not auth['Nombre'] or not auth['Contraseña']:
+                return make_response(
+                    'Could not verify',
+                    401,
+                    {'WWW-Authenticate' : 'Basic realm="Login required!"'})
+
+            table = self.Table.query.filter_by(Nombre=auth['Nombre']).first()
+
+            if not table:
+                return make_response(
+                    'Could not verify',
+                    401,
+                    {'WWW-Authenticate' : 'Basic realm="Login required!"'})
+
+            if table.Comparar_contraseñas(auth['Contraseña']):
+                token = jwt.encode({
+                    'id': table.id,
+                    'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
+                }, app.config['SECRET_KEY'])
+                return jsonify({'token' : token.decode('UTF-8')})
+
+            return make_response(
+                'Could not verify',
+                401,
+                {'WWW-Authenticate' : 'Basic realm="Login required!"'})
+
+    def add(self):
+        New_registry = self.Table(request.json)
+        New_registry.save()
+        return self.Result.jsonify(New_registry)
+
+    def put(self, id=None):
+        registry_update = self.Table.query.get(id)
+        if not registry_update:
+            return jsonify({"Message": f"registro {id} inexistente"})
+        registry_update.changes(request.json)
+        registry_update.save()
+        return request.json
+
+    def delete(self, id):
+        registry_delete = self.Table.query.get(id)
+        if not registry_delete:
+            return jsonify({"Message": f"registro {id} inexistente"})
+        registry_delete.delete()
+        return self.Result.jsonify(registry_delete)
+EOF
+
+cat > requirements.txt << EOF
+flask
+flask_wtf
+flask_sqlalchemy
+mysqlclient
+flask_marshmallow
+marshmallow-sqlalchemy
+simplejson
+pyjwt
+flask-expects-json
+EOF
+}
+install_dep () {
+  poetry init -n
+  poetry add -D pytest Black flake8
+  cat requirements.txt | xargs -L 1 poetry add
+}
+make_dockerfile (){
+mkdir .devcontainer
+cd .devcontainer
+cat > devcontainer.json << EOF
+{
+  "name": "Docker python",
+  "dockerFile": "Dockerfile",
+  "appPort": 3000,
+  //"postCreateCommand": "mysqld &"
+  "postCreateCommand": "mysqld_safe --skip-grant-tables &"
+}
+EOF
+
+cat > Dockerfile << EOF
+FROM python:3.7-alpine
+RUN apk update
+RUN apk add mysql mysql-client mariadb-connector-c mariadb-dev
+RUN apk add --virtual build-deps gcc musl-dev
+RUN pip install flask flask_wtf flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy simplejson pyjwt flask-expects-json mysqlclient
+EXPOSE 3306
+EOF
+
+echo -e "\n\e[91m=>\e[0m \e[36m\uf308\e[0m Dokerfile Creado"
+}
+make_project (){
+    echo -e "\e[34m=>\e[0m \e[96m\ue5fc\e[0m Folders Creados"
+    mkdir public views routes models helpers config
+    echo -e "\e[35m=>\e[0m \e[33m\ue235\e[0m Pyfiles Creados"
+    make_pyfiles
+    tempfile="/tmp/install_d.log"
+    echo -ne "\e[97m=>\e[0m \e[31m\uf8d5\e[0m Instalando dependencias\r"
+    install_dep 2>/dev/null 1>>$tempfile &
+    while ps |grep $! &>/dev/null; do
+        echo -ne "\e[97m=>\e[0m \e[32m\uf8d6\e[0m Instalando dependencias\r"
+        sleep 1
+        echo -ne "\e[97m=>\e[0m \e[31m\uf8d5\e[0m Instalando dependencias\r"
+        sleep 1
+    done
+    echo -ne "\e[97m=>\e[0m \e[32m\uf8d6\e[0m Dependencias Instaladas\r"
+    rm $tempfile
+    rm requirements.txt
+    if [ $2 ];then
+        make_dockerfile
+    fi
+    echo -e "\e[96m=>\e[0m \e[92m\uf00c\e[0m $1 Creado"
+}
+while getopts n:id flag
+do
+    case "${flag}" in
+        n) projectname=${OPTARG};;
+        i) init=true;;
+        d) docker=true;;
+        *)
+            echo 'La vandera no existe' >&2
+            exit 1
+        ;;
+    esac
+done
+if [ $init ] && [ ! $projectname ];then
+    make_project 'Inicializado y' $docker
+elif [ ! $init ] && [ $projectname ];then
+    if [ -d $(pwd)/$projectname ];then
+        echo -e "\e[31m\ue009\e[0m\e[5m El proyecto ya exite en su sistema\e[0m"
+    else
+        echo -e "\e[93m=>\e[0m \e[30m\uf593\e[0m Creando API REST flask $projectname"
+        mkdir $projectname
+        cd $projectname
+        make_project $projectname $docker
+    fi
+elif [ $docker ] && [ ! $init ] && [ ! $projectname ];then
+    make_dockerfile
+else
+    echo -e "\e[31m\ue009\e[0m\e[5m Eror en la secuencia de vandera -n y -i no deben usarse juntas\e[0m" >&2
+    exit 1
+fi
