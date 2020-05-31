@@ -152,7 +152,7 @@ from config import DevelopmentConfig
 # * from routes import
 # * from flask_wtf import CSRFProtect
 # * import json
-app = Flask(__name__, static_folder="public", template_folder="views")
+# * app = Flask(__name__, static_folder="public", template_folder="views")
 app.config.from_object(DevelopmentConfig)
 # ! csrf = CSRFProtect()
 # * Error 404
@@ -382,7 +382,7 @@ echo -e "\n\e[91m=>\e[0m \e[36m\uf308\e[0m Dokerfile Creado"
 }
 make_project (){
     echo -e "\e[34m=>\e[0m \e[96m\ue5fc\e[0m Folders Creados"
-    mkdir public views routes models helpers config
+    mkdir routes models helpers config
     echo -e "\e[35m=>\e[0m \e[33m\ue235\e[0m Pyfiles Creados"
     make_pyfiles
     tempfile="/tmp/install_d.log"
