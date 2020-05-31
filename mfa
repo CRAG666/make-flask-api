@@ -160,7 +160,7 @@ app.config.from_object(DevelopmentConfig)
 def page_not_found(err):
     return 'Esta pagina no pudo encontrarse'
 
-# * index routes
+# * index route
 @app.route('/')
 def index():
     return 'hola mundo'
@@ -169,13 +169,15 @@ EOF
 
 cat > run.py << EOF
 from server import app
-from models.all_tables import db, ma
+from models import ma
+from models.database_init import db, create_database
 if __name__ == "__main__":
     # ! csrf.init_app(app)
     db.init_app(app)
     ma.init_app(app)
-#    with app.app_context():
-#        db.create_all()
+    with app.app_context():
+        create_database()
+        db.create_all()
     app.run()
 EOF
 
@@ -189,8 +191,10 @@ class Config:
 
 class DevelopmentConfig(Config):
     DEBUG = True
-    SQLALCHEMY_DATABASE_URI = 'mysql://root:' + environ['passmaria'] + '@localhost/app1'
-#    SQLALCHEMY_DATABASE_URI = 'mysql://root:' + '@localhost/app1'
+    EGINE_URI = 'mysql://root:' + environ['passmaria'] + '@localhost'
+#    EGINE_URI = 'mysql://root:@localhost'
+    DB_NAME = 'dbname'
+    SQLALCHEMY_DATABASE_URI = f'{EGINE_URI}/{DB_NAME}'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 EOF
 
@@ -211,15 +215,21 @@ class standard():
         db.session.commit()
 EOF
 
-cat > models/all_tables.py << EOF
-from . import db, ma
+cat > models/database_init.py << EOF
+from flask import current_app as app
+from . import db
+
+
+def create_database():
+    engine = db.create_engine(app.config['EGINE_URI'], {})
+    engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
 EOF
 
 cat > routes/__init__.py << EOF
 from flask import Blueprint
 EOF
 
-cat > routes/standard_methods.py << EOF
+cat > routes/api_template.py << EOF
 from flask import jsonify, request, make_response
 from flask.views import MethodView
 import jwt
@@ -310,6 +320,23 @@ class methods_api(MethodView):
             return jsonify({"Message": f"registro {id} inexistente"})
         registry_delete.delete()
         return self.Result.jsonify(registry_delete)
+EOF
+
+cat > routes/create_routesStandars.py <<EOF
+from routes.api_template import methods_api
+
+
+def create_routes(apiname: str, table: object, tableScheme: object, jsonScheme: dict, blueprintName: object, endpoins: list):
+    view_func = methods_api.as_view(
+        apiname,
+        table,
+        tableScheme,
+        jsonScheme)
+    for i in endpoins:
+        blueprintName.add_url_rule(
+            i[0],
+            methods=[i[1]],
+            view_func=view_func)
 EOF
 
 cat > requirements.txt << EOF
