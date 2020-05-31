@@ -145,25 +145,26 @@ tempCodeRunnerFile.py
 EOF
 
 cat > server.py << EOF
-from flask import Flask
+from flask import Flask, jsonify
 from config import DevelopmentConfig
 # * from flask import flash
 # * from flask import session
 # * from routes import
 # * from flask_wtf import CSRFProtect
 # * import json
-# * app = Flask(__name__, static_folder="public", template_folder="views")
+app = Flask(__name__)
 app.config.from_object(DevelopmentConfig)
 # ! csrf = CSRFProtect()
 # * Error 404
+
+
 @app.errorhandler(404)
 def page_not_found(err):
-    return 'Esta pagina no pudo encontrarse'
+    return jsonify({"Message": "Esta pagina no pudo encontrarse"})
+
 
 # * index route
-@app.route('/')
-def index():
-    return 'hola mundo'
+
 # * Routes
 EOF
 
@@ -205,7 +206,7 @@ db = SQLAlchemy()
 ma = Marshmallow()
 
 
-class standard():
+class Standard:
     def save(self):
         db.session.add(self)
         db.session.commit()
@@ -238,7 +239,7 @@ import datetime
 from flask_expects_json import expects_json
 
 
-class methods_api(MethodView):
+class MethodsApi(MethodView):
     def __init__(self, Table, TableSchema, schema):
         self.Table = Table
         self.Result = TableSchema()
@@ -323,17 +324,17 @@ class methods_api(MethodView):
 EOF
 
 cat > routes/create_routesStandars.py <<EOF
-from routes.api_template import methods_api
+from routes.api_template import MethodsApi
 
 
-def create_routes(apiname: str, table: object, tableScheme: object, jsonScheme: dict, blueprintName: object, endpoins: list):
-    view_func = methods_api.as_view(
-        apiname,
+def create_routes(api_name: str, table: object, table_scheme: object, json_scheme: dict, blueprint_name: object, endpoints: list):
+    view_func = MethodsApi.as_view(
+        api_name,
         table,
-        tableScheme,
-        jsonScheme)
-    for i in endpoins:
-        blueprintName.add_url_rule(
+        table_scheme,
+        json_scheme)
+    for i in endpoints:
+        blueprint_name.add_url_rule(
             i[0],
             methods=[i[1]],
             view_func=view_func)
