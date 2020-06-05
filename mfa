@@ -1,7 +1,7 @@
 #!/bin/bash
 make_pyfiles () {
 cat > .gitignore << EOF
-# Created by https://www.gitignore.io/api/python,visualstudiocode,virtualenv
+# Created by https://www.gitignore.io/v1/example,visualstudiocode,virtualenv
 # Edit at https://www.gitignore.io/?templates=python,visualstudiocode,virtualenv
 
 ### Python ###
@@ -133,7 +133,7 @@ pip-selfcheck.json
 # Ignore all local history of files
 .history
 
-# End of https://www.gitignore.io/api/python,visualstudiocode,virtualenv
+# End of https://www.gitignore.io/v1/example,visualstudiocode,virtualenv
 #temporal archives
 *~
 #poetry
@@ -149,7 +149,7 @@ from flask import Flask, jsonify
 from config import DevelopmentConfig
 # * from flask import flash
 # * from flask import session
-# * from routes import
+from routes.example_routes import example
 # * from flask_wtf import CSRFProtect
 # * import json
 app = Flask(__name__)
@@ -166,6 +166,7 @@ def page_not_found(err):
 # * index route
 
 # * Routes
+app.register_blueprint(example)
 EOF
 
 cat > run.py << EOF
@@ -219,106 +220,105 @@ EOF
 cat > models/database_init.py << EOF
 from flask import current_app as app
 from . import db
+from .table_example import TableExample
 
 
 def create_database():
     engine = db.create_engine(app.config['EGINE_URI'], {})
     engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
+
+
+class TableExample(TableExample):
+    def __init__(self):
+        super(TableExample, self).__init__()
 EOF
 
 cat > routes/__init__.py << EOF
 from flask import Blueprint
+example = Blueprint('example', __name__)
 EOF
 
 cat > routes/api_template.py << EOF
-from flask import jsonify, request, make_response
+from flask import jsonify, request
 from flask.views import MethodView
 import jwt
 from flask import current_app as app
 import datetime
 from flask_expects_json import expects_json
-
+from helpers.validations import token_required
 
 class MethodsApi(MethodView):
-    def __init__(self, Table, TableSchema, schema):
-        self.Table = Table
-        self.Result = TableSchema()
-        self.Results = TableSchema(many=True)
+    def __init__(self, table, table_schema, schema: dict):
+        self.Table = table
+        self.Result = table_schema()
+        self.Results = table_schema(many=True)
         self.put = expects_json(schema)(self.put)
         self.add = expects_json(schema)(self.add)
 
+    @token_required
     def get(self, id=None):
-        rute = str(request.url_rule)
         if id:
-            if rute.find('registry') != -1:
-                one_registry = self.Table.query.filter_by(id=id).first()
-                if one_registry:
-                    return self.Result.jsonify(one_registry)
-                return jsonify({"Message": "registro inexistente"})
-            else:
-                paginar = self.Table.query.paginate(id, 15, False)
-                result = dict(
-                    total=paginar.total,
-                    current_page=paginar.page,
-                    per_page=paginar.per_page)
-                return jsonify(
-                    {"Result": self.Results.dump(paginar.items),
-                     "metadata": result})
+            one_registry = self.Table.query.filter_by(id=id).first()
+            if one_registry:
+                return self.Result.jsonify(one_registry)
+            return jsonify({"Message": "nonexistent registration"})
+
         else:
-            all_registrys = self.Table.query.all()
-            print(all_registrys)
-            return self.Results.jsonify(all_registrys)
+            search_parameters = request.args.to_dict()
+            if 'page' in search_parameters.keys():
+                page = int(search_parameters['page'])
+                per_page = int(search_parameters['size']) if 'size' in search_parameters.keys() else 10
+                paginate = self.Table.query.paginate(page, per_page, False)
+                return jsonify(
+                    {"Result": self.Results.dump(paginate.items),
+                     "total-pages": paginate.total})
+            else:
+                all_registrys = self.Table.query.all()
+                return self.Results.jsonify(all_registrys)
 
     def post(self):
         rute = str(request.url_rule)
-        if rute.find('add') != -1:
-            return self.add()
-        else:
+        if rute.find('login') != -1:
             auth = request.json
+            res_err = jsonify({'Authenticate' : 'Could not verify'})
+            if not auth or not auth['name'] or not auth['password']:
+                return res_err, 401
 
-            if not auth or not auth['Nombre'] or not auth['Contraseña']:
-                return make_response(
-                    'Could not verify',
-                    401,
-                    {'WWW-Authenticate' : 'Basic realm="Login required!"'})
-
-            table = self.Table.query.filter_by(Nombre=auth['Nombre']).first()
+            table = self.Table.query.filter_by(name=auth['name']).first()
 
             if not table:
-                return make_response(
-                    'Could not verify',
-                    401,
-                    {'WWW-Authenticate' : 'Basic realm="Login required!"'})
+                return res_err, 401
 
-            if table.Comparar_contraseñas(auth['Contraseña']):
+            if table.compare_passwords(auth['password']):
                 token = jwt.encode({
                     'id': table.id,
                     'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
                 }, app.config['SECRET_KEY'])
                 return jsonify({'token' : token.decode('UTF-8')})
+            return res_err, 401
+        else:
+            return self.add()
 
-            return make_response(
-                'Could not verify',
-                401,
-                {'WWW-Authenticate' : 'Basic realm="Login required!"'})
-
+    @token_required
     def add(self):
-        New_registry = self.Table(request.json)
-        New_registry.save()
-        return self.Result.jsonify(New_registry)
+        new_registry = self.Table(request.json)
+        new_registry.save()
+        return self.Result.jsonify(new_registry), 201
 
+    @token_required
     def put(self, id=None):
         registry_update = self.Table.query.get(id)
         if not registry_update:
-            return jsonify({"Message": f"registro {id} inexistente"})
+            return jsonify({"Message": f"record {id} nonexistent"})
         registry_update.changes(request.json)
         registry_update.save()
         return request.json
 
+    @token_required
     def delete(self, id):
         registry_delete = self.Table.query.get(id)
         if not registry_delete:
-            return jsonify({"Message": f"registro {id} inexistente"})
+            return jsonify({"Message": f"record {id} nonexistent"})
         registry_delete.delete()
         return self.Result.jsonify(registry_delete)
 EOF
@@ -351,6 +351,93 @@ simplejson
 pyjwt
 flask-expects-json
 EOF
+
+cat > helpers/validations.py << EOF
+from flask import current_app as app
+from flask import jsonify, request
+import jwt
+from functools import wraps
+from models.table_example import TableExample
+
+
+def token_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        token = None
+        if 'x-access-token' in request.headers:
+            token = request.headers['x-access-token']
+
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'])
+            TableExample.query.filter_by(id=data['id']).first()
+        except:
+            return jsonify({'message': 'Token is invalid!'}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+EOF
+
+cat > models/table_example.py << EOF
+from . import db, ma, Standard
+from werkzeug.security import generate_password_hash, check_password_hash
+
+
+class TableExample(db.Model, Standard):
+    __tablename__ = 'TableExample'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+
+    def __init__(self, fields: dict):
+        self.changes(fields)
+
+    def changes(self, fields: dict):
+        self.name = fields['name']
+        self.password = self.__generate_password(fields['password'])
+
+    @staticmethod
+    def __generate_password(password: str) -> str:
+        return generate_password_hash(password)
+
+    def compare_passwords(self, password: str) -> bool:
+        return check_password_hash(self.password, password)
+
+
+class TableExample_Schema(ma.Schema):
+
+    class Meta:
+        fields = ('id', 'name', 'password')
+EOF
+
+cat > routes/example_routes.py << EOF
+from . import example
+from models.table_example import TableExample, TableExample_Schema
+from routes.create_routesStandars import create_routes
+schema = {
+    'type': 'object',
+    'properties': {
+        "name": {'type': 'string'},
+        "password": {'type': 'string'}
+    },
+    'required': ["name", "password"]
+}
+create_routes(
+    'example_api',
+    TableExample,
+    TableExample_Schema,
+    schema,
+    example,
+    [
+        ['/v1/example/login', 'POST'],
+        ['/v1/example', 'POST'],
+        ['/v1/example/', 'GET'],
+        ['/v1/example/<int:id>', 'GET'],
+        ['/v1/example/<int:id>', 'PUT'],
+        ['/v1/example/<int:id>', 'DELETE']
+    ])
+EOF
 }
 install_dep () {
   poetry init -n
@@ -378,7 +465,6 @@ RUN apk add --virtual build-deps gcc musl-dev
 RUN pip install flask flask_wtf flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy simplejson pyjwt flask-expects-json mysqlclient
 EXPOSE 3306
 EOF
-
 echo -e "\n\e[91m=>\e[0m \e[36m\uf308\e[0m Dokerfile Creado"
 }
 make_project (){
