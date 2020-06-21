@@ -9,9 +9,9 @@ Cli to create rest api structure
 * Install [nerdfonts](https://www.nerdfonts.com)
 
 ## Install
-1 clone repositoy
-2 access the folder
-3 execute this command "sudo cp mfa /usr/local/bin"
+1. clone repositoy
+2. access the folder
+3. execute this command "sudo cp mfa /usr/local/bin"
 
 ## Options
 
