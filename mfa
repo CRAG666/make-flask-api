@@ -160,7 +160,12 @@ app.config.from_object(DevelopmentConfig)
 
 @app.errorhandler(404)
 def page_not_found(err):
-    return jsonify({"Message": "Esta pagina no pudo encontrarse"})
+    return jsonify({"Message": "This page could not be found"})
+
+
+@app.errorhandler(405)
+def method_not_allowed(err):
+    return jsonify({"Message": "The method is not allowed for the requested URL"})
 
 
 # * index route
@@ -194,8 +199,8 @@ class Config:
 class DevelopmentConfig(Config):
     DEBUG = True
     EGINE_URI = 'mysql://root:' + environ['passmaria'] + '@localhost'
-#    EGINE_URI = 'mysql://root:@localhost'
-    DB_NAME = 'dbname'
+    # * EGINE_URI = 'mysql://root:@localhost'
+    DB_NAME = 'exampledb'
     SQLALCHEMY_DATABASE_URI = f'{EGINE_URI}/{DB_NAME}'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 EOF
@@ -203,6 +208,7 @@ EOF
 cat > models/__init__.py << EOF
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
+from sqlalchemy import exc
 db = SQLAlchemy()
 ma = Marshmallow()
 
@@ -210,7 +216,11 @@ ma = Marshmallow()
 class Standard:
     def save(self):
         db.session.add(self)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except exc.SQLAlchemyError:
+            return False
+        return True
 
     def delete(self):
         db.session.delete(self)
@@ -244,81 +254,100 @@ from flask.views import MethodView
 import jwt
 from flask import current_app as app
 import datetime
-from flask_expects_json import expects_json
-from helpers.validations import token_required
+from helpers.validations import token_required, validate_json
+
 
 class MethodsApi(MethodView):
-    def __init__(self, table, table_schema, schema: dict):
+    def __init__(self, table, table_schema):
         self.Table = table
         self.Result = table_schema()
         self.Results = table_schema(many=True)
-        self.put = expects_json(schema)(self.put)
-        self.add = expects_json(schema)(self.add)
+        self.put = validate_json(self.Result)(self.put)
+        self.add = validate_json(self.Result)(self.add)
+        self.nonexistent_id = jsonify({"Message": "record nonexistent"}), 404
+        self.databse_err = jsonify(
+            {
+                "Err": "Error trying to insert data",
+                "Possibilities": {
+                    "1": "Data already existing in the table",
+                    "2": "Could not connect to DB",
+                    "3": "Data integrity error"
+                }
+            }), 409
 
     @token_required
     def get(self, id=None):
+        nonexistent_items = jsonify(
+            {"Message": "No There are no items for this query"}), 404
         if id:
             one_registry = self.Table.query.filter_by(id=id).first()
             if one_registry:
                 return self.Result.jsonify(one_registry)
-            return jsonify({"Message": "nonexistent registration"})
-
+            return self.nonexistent_id
         else:
-            search_parameters = request.args.to_dict()
-            if 'page' in search_parameters.keys():
-                page = int(search_parameters['page'])
-                per_page = int(search_parameters['size']) if 'size' in search_parameters.keys() else 10
-                paginate = self.Table.query.paginate(page, per_page, False)
+            p_busqueda = request.args.to_dict()
+            if 'page' in p_busqueda.keys():
+                page = int(p_busqueda['page'])
+                per_page = int(p_busqueda['size']) if 'size' in p_busqueda.keys() else 10
+                paginar = self.Table.query.paginate(page, per_page, False)
+                if not paginar.items:
+                    return nonexistent_items
                 return jsonify(
-                    {"Result": self.Results.dump(paginate.items),
-                     "total-pages": paginate.total})
+                    {"Result": self.Results.dump(paginar.items),
+                     "total-pages": paginar.pages})
             else:
                 all_registrys = self.Table.query.all()
+                if not all_registrys:
+                    return nonexistent_items
                 return self.Results.jsonify(all_registrys)
 
     def post(self):
         rute = str(request.url_rule)
         if rute.find('login') != -1:
             auth = request.json
-            res_err = jsonify({'Authenticate' : 'Could not verify'})
-            if not auth or not auth['name'] or not auth['password']:
-                return res_err, 401
+            reserr = jsonify({'Authenticate' : 'Could not verify'})
+            if not auth or not auth['Nombre'] or not auth['Contraseña']:
+                return reserr, 401
 
-            table = self.Table.query.filter_by(name=auth['name']).first()
+            table = self.Table.query.filter_by(Nombre=auth['Nombre']).first()
 
             if not table:
-                return res_err, 401
+                return reserr, 401
 
-            if table.compare_passwords(auth['password']):
+            if table.Comparar_contraseñas(auth['Contraseña']):
                 token = jwt.encode({
                     'id': table.id,
                     'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
                 }, app.config['SECRET_KEY'])
                 return jsonify({'token' : token.decode('UTF-8')})
-            return res_err, 401
+            return reserr, 401
         else:
             return self.add()
 
     @token_required
     def add(self):
         new_registry = self.Table(request.json)
-        new_registry.save()
+        insert_correct_data = new_registry.save()
+        if not insert_correct_data:
+            return self.databse_err
         return self.Result.jsonify(new_registry), 201
 
     @token_required
     def put(self, id=None):
         registry_update = self.Table.query.get(id)
         if not registry_update:
-            return jsonify({"Message": f"record {id} nonexistent"})
+            return self.nonexistent_id
         registry_update.changes(request.json)
-        registry_update.save()
-        return request.json
+        update_correct_data = registry_update.save()
+        if not update_correct_data:
+            return self.databse_err
+        return self.Result.jsonify(registry_update)
 
     @token_required
     def delete(self, id):
         registry_delete = self.Table.query.get(id)
         if not registry_delete:
-            return jsonify({"Message": f"record {id} nonexistent"})
+            return self.nonexistent_id
         registry_delete.delete()
         return self.Result.jsonify(registry_delete)
 EOF
@@ -327,17 +356,26 @@ cat > routes/create_routesStandars.py <<EOF
 from routes.api_template import MethodsApi
 
 
-def create_routes(api_name: str, table: object, table_scheme: object, json_scheme: dict, blueprint_name: object, endpoints: list):
+def create_routes(table: object, table_scheme: object, blueprint_name: object, noun: str, login: bool = False):
     view_func = MethodsApi.as_view(
-        api_name,
+        f"{noun}_api",
         table,
-        table_scheme,
-        json_scheme)
+        table_scheme)
+    endpoints = get_endpoints(noun, login)
     for i in endpoints:
         blueprint_name.add_url_rule(
             i[0],
-            methods=[i[1]],
+            methods=i[1],
             view_func=view_func)
+
+
+def get_endpoints(noun: str, login: bool):
+    endpont_list = [
+        [f'/api/{noun}/', ['POST', 'GET']],
+        [f'/api/{noun}/<int:id>', ['GET', 'PUT', 'DELETE']]]
+    if login:
+        endpont_list.insert(0, [f'/api/{noun}/login', ['POST']])
+    return endpont_list
 EOF
 
 cat > requirements.txt << EOF
@@ -347,9 +385,7 @@ flask_sqlalchemy
 mysqlclient
 flask_marshmallow
 marshmallow-sqlalchemy
-simplejson
 pyjwt
-flask-expects-json
 EOF
 
 cat > helpers/validations.py << EOF
@@ -358,6 +394,7 @@ from flask import jsonify, request
 import jwt
 from functools import wraps
 from models.table_example import TableExample
+from marshmallow import ValidationError
 
 
 def token_required(fn):
@@ -377,17 +414,32 @@ def token_required(fn):
             return jsonify({'message': 'Token is invalid!'}), 401
         return fn(*args, **kwargs)
     return wrapper
+
+
+def validate_json(schema):
+    def inner_function(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            try:
+                schema.load(request.json)
+            except ValidationError as err:
+                return err.messages
+            return f(*args, **kwargs)
+        return wrapper
+    return inner_function
 EOF
 
 cat > models/table_example.py << EOF
 from . import db, ma, Standard
 from werkzeug.security import generate_password_hash, check_password_hash
+from marshmallow import validate
 
 
 class TableExample(db.Model, Standard):
     __tablename__ = 'TableExample'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
 
     def __init__(self, fields: dict):
@@ -396,6 +448,7 @@ class TableExample(db.Model, Standard):
     def changes(self, fields: dict):
         self.name = fields['name']
         self.password = self.__generate_password(fields['password'])
+        self.email = fields['email']
 
     @staticmethod
     def __generate_password(password: str) -> str:
@@ -406,43 +459,41 @@ class TableExample(db.Model, Standard):
 
 
 class TableExample_Schema(ma.Schema):
+    name = ma.Str(validate=validate.Length(min=1))
+    email = ma.Email()
+    password = ma.Str(validate=validate.Length(min=4), load_only=True)
 
     class Meta:
-        fields = ('id', 'name', 'password')
+        fields = ('id', 'name', 'email', 'password')
 EOF
 
 cat > routes/example_routes.py << EOF
 from . import example
 from models.table_example import TableExample, TableExample_Schema
 from routes.create_routesStandars import create_routes
-schema = {
-    'type': 'object',
-    'properties': {
-        "name": {'type': 'string'},
-        "password": {'type': 'string'}
-    },
-    'required': ["name", "password"]
-}
-create_routes(
-    'example_api',
-    TableExample,
-    TableExample_Schema,
-    schema,
-    example,
-    [
-        ['/v1/example/login', 'POST'],
-        ['/v1/example', 'POST'],
-        ['/v1/example/', 'GET'],
-        ['/v1/example/<int:id>', 'GET'],
-        ['/v1/example/<int:id>', 'PUT'],
-        ['/v1/example/<int:id>', 'DELETE']
-    ])
+
+create_routes(TableExample, TableExample_Schema, example, "example")
 EOF
 }
-install_dep () {
+poetry_install () {
   poetry init -n
   poetry add -D pytest Black flake8
   cat requirements.txt | xargs -L 1 poetry add
+  rm requirements.txt
+}
+install_dep (){
+    tempfile="/tmp/install_d.log"
+    echo -ne "\e[97m=>\e[0m \e[31m\uf8d5\e[0m Instalando dependencias\r"
+    poetry_install 2>/dev/null 1>>$tempfile &
+    while ps |grep $! &>/dev/null; do
+        echo -ne "\e[97m=>\e[0m \e[32m\uf8d6\e[0m Instalando dependencias\r"
+        sleep 1
+        echo -ne "\e[97m=>\e[0m \e[31m\uf8d5\e[0m Instalando dependencias\r"
+        sleep 1
+    done
+    echo -ne "\e[97m=>\e[0m \e[32m\uf8d6\e[0m Dependencias Instaladas\r"
+    rm $tempfile
+
 }
 make_dockerfile (){
 mkdir .devcontainer
@@ -462,7 +513,7 @@ FROM python:3.7-alpine
 RUN apk update
 RUN apk add mysql mysql-client mariadb-connector-c mariadb-dev
 RUN apk add --virtual build-deps gcc musl-dev
-RUN pip install flask flask_wtf flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy simplejson pyjwt flask-expects-json mysqlclient
+RUN pip install flask flask_wtf flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy mysqlclient pyjwt
 EXPOSE 3306
 EOF
 echo -e "\n\e[91m=>\e[0m \e[36m\uf308\e[0m Dokerfile Creado"
@@ -472,29 +523,21 @@ make_project (){
     mkdir routes models helpers config
     echo -e "\e[35m=>\e[0m \e[33m\ue235\e[0m Pyfiles Creados"
     make_pyfiles
-    tempfile="/tmp/install_d.log"
-    echo -ne "\e[97m=>\e[0m \e[31m\uf8d5\e[0m Instalando dependencias\r"
-    install_dep 2>/dev/null 1>>$tempfile &
-    while ps |grep $! &>/dev/null; do
-        echo -ne "\e[97m=>\e[0m \e[32m\uf8d6\e[0m Instalando dependencias\r"
-        sleep 1
-        echo -ne "\e[97m=>\e[0m \e[31m\uf8d5\e[0m Instalando dependencias\r"
-        sleep 1
-    done
-    echo -ne "\e[97m=>\e[0m \e[32m\uf8d6\e[0m Dependencias Instaladas\r"
-    rm $tempfile
-    rm requirements.txt
+    if [ $3 ]; then
+        install_dep
+    fi
     if [ $2 ];then
         make_dockerfile
     fi
     echo -e "\e[96m=>\e[0m \e[92m\uf00c\e[0m $1 Creado"
 }
-while getopts n:id flag
+while getopts n:idp flag
 do
     case "${flag}" in
         n) projectname=${OPTARG};;
         i) init=true;;
         d) docker=true;;
+        p) poetry=true;;
         *)
             echo 'La vandera no existe' >&2
             exit 1
@@ -502,7 +545,7 @@ do
     esac
 done
 if [ $init ] && [ ! $projectname ];then
-    make_project 'Inicializado y' $docker
+    make_project 'Inicializado y' $docker $poetry
 elif [ ! $init ] && [ $projectname ];then
     if [ -d $(pwd)/$projectname ];then
         echo -e "\e[31m\ue009\e[0m\e[5m El proyecto ya exite en su sistema\e[0m"
@@ -510,10 +553,15 @@ elif [ ! $init ] && [ $projectname ];then
         echo -e "\e[93m=>\e[0m \e[30m\uf593\e[0m Creando API REST flask $projectname"
         mkdir $projectname
         cd $projectname
-        make_project $projectname $docker
+        make_project $projectname $docker $poetry
     fi
-elif [ $docker ] && [ ! $init ] && [ ! $projectname ];then
+elif [ $docker ] && [ $poetry ] && [ ! $init ] && [ ! $projectname ];then
     make_dockerfile
+    install_dep
+elif [ $docker ] && [ ! $init ] && [ ! $projectname ] && [ ! $poetry ];then
+    make_dockerfile
+elif [ $poetry ] && [ ! $init ] && [ ! $projectname ] && [ ! $docker ];then
+    install_dep
 else
     echo -e "\e[31m\ue009\e[0m\e[5m Eror en la secuencia de vandera -n y -i no deben usarse juntas\e[0m" >&2
     exit 1
