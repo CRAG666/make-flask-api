@@ -147,22 +147,18 @@ EOF
 cat > server.py << EOF
 from flask import Flask, jsonify
 from config import DevelopmentConfig
-# * from flask import flash
-# * from flask import session
 from routes.example_routes import example
-# * from flask_wtf import CSRFProtect
-# * import json
 app = Flask(__name__)
 app.config.from_object(DevelopmentConfig)
-# ! csrf = CSRFProtect()
+
+
 # * Error 404
-
-
 @app.errorhandler(404)
 def page_not_found(err):
     return jsonify({"Message": "This page could not be found"})
 
 
+# * Error 405
 @app.errorhandler(405)
 def method_not_allowed(err):
     return jsonify({"Message": "The method is not allowed for the requested URL"})
@@ -178,8 +174,9 @@ cat > run.py << EOF
 from server import app
 from models import ma
 from models.database_init import db, create_database
+
+
 if __name__ == "__main__":
-    # ! csrf.init_app(app)
     db.init_app(app)
     ma.init_app(app)
     with app.app_context():
@@ -224,7 +221,11 @@ class Standard:
 
     def delete(self):
         db.session.delete(self)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except exc.SQLAlchemyError:
+            return False
+        return True
 EOF
 
 cat > models/database_init.py << EOF
@@ -306,15 +307,15 @@ class MethodsApi(MethodView):
         if rute.find('login') != -1:
             auth = request.json
             reserr = jsonify({'Authenticate' : 'Could not verify'})
-            if not auth or not auth['Nombre'] or not auth['Contraseña']:
+            if not auth or not auth['name'] or not auth['password']:
                 return reserr, 401
 
-            table = self.Table.query.filter_by(Nombre=auth['Nombre']).first()
+            table = self.Table.query.filter_by(name=auth['name']).first()
 
             if not table:
                 return reserr, 401
 
-            if table.Comparar_contraseñas(auth['Contraseña']):
+            if table.compare_passwords(auth['password']):
                 token = jwt.encode({
                     'id': table.id,
                     'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
@@ -348,7 +349,9 @@ class MethodsApi(MethodView):
         registry_delete = self.Table.query.get(id)
         if not registry_delete:
             return self.nonexistent_id
-        registry_delete.delete()
+        deleted_data = registry_delete.delete()
+        if not deleted_data:
+            return self.databse_err
         return self.Result.jsonify(registry_delete)
 EOF
 
@@ -410,7 +413,7 @@ def token_required(fn):
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'])
             TableExample.query.filter_by(id=data['id']).first()
-        except:
+        except jwt.ExpiredSignature:
             return jsonify({'message': 'Token is invalid!'}), 401
         return fn(*args, **kwargs)
     return wrapper
@@ -523,13 +526,6 @@ make_project (){
     mkdir routes models helpers config
     echo -e "\e[35m=>\e[0m \e[33m\ue235\e[0m Pyfiles Creados"
     make_pyfiles
-    if [ $3 ]; then
-        install_dep
-    fi
-    if [ $2 ];then
-        make_dockerfile
-    fi
-    echo -e "\e[96m=>\e[0m \e[92m\uf00c\e[0m $1 Creado"
 }
 while getopts n:idp flag
 do
@@ -545,7 +541,16 @@ do
     esac
 done
 if [ $init ] && [ ! $projectname ];then
-    make_project 'Inicializado y' $docker $poetry
+    make_project
+    if [ $docker ] && [ $poetry ];then
+        make_dockerfile
+        install_dep
+    elif [ $poetry ];then
+        install_dep
+    elif [ $docker ];then
+        make_dockerfile
+    fi
+    echo -e "\e[96m=>\e[0m \e[92m\uf00c\e[0m Inicializado"
 elif [ ! $init ] && [ $projectname ];then
     if [ -d $(pwd)/$projectname ];then
         echo -e "\e[31m\ue009\e[0m\e[5m El proyecto ya exite en su sistema\e[0m"
@@ -553,7 +558,16 @@ elif [ ! $init ] && [ $projectname ];then
         echo -e "\e[93m=>\e[0m \e[30m\uf593\e[0m Creando API REST flask $projectname"
         mkdir $projectname
         cd $projectname
-        make_project $projectname $docker $poetry
+        make_project
+        if [ $docker ] && [ $poetry ];then
+            make_dockerfile
+            install_dep
+        elif [ $poetry ];then
+            install_dep
+        elif [ $docker ];then
+            make_dockerfile
+        fi
+        echo -e "\e[96m=>\e[0m \e[92m\uf00c\e[0m $projectname Creado"
     fi
 elif [ $docker ] && [ $poetry ] && [ ! $init ] && [ ! $projectname ];then
     make_dockerfile
