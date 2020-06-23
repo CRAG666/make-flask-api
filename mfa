@@ -216,6 +216,7 @@ class Standard:
         try:
             db.session.commit()
         except exc.SQLAlchemyError:
+            db.session.rollback()
             return False
         return True
 
@@ -266,15 +267,6 @@ class MethodsApi(MethodView):
         self.put = validate_json(self.Result)(self.put)
         self.add = validate_json(self.Result)(self.add)
         self.nonexistent_id = jsonify({"Message": "record nonexistent"}), 404
-        self.databse_err = jsonify(
-            {
-                "Err": "Error trying to insert data",
-                "Possibilities": {
-                    "1": "Data already existing in the table",
-                    "2": "Could not connect to DB",
-                    "3": "Data integrity error"
-                }
-            }), 409
 
     @token_required
     def get(self, id=None):
@@ -330,7 +322,7 @@ class MethodsApi(MethodView):
         new_registry = self.Table(request.json)
         insert_correct_data = new_registry.save()
         if not insert_correct_data:
-            return self.databse_err
+            return self.databse_err()
         return self.Result.jsonify(new_registry), 201
 
     @token_required
@@ -341,7 +333,7 @@ class MethodsApi(MethodView):
         registry_update.changes(request.json)
         update_correct_data = registry_update.save()
         if not update_correct_data:
-            return self.databse_err
+            return self.databse_err("update")
         return self.Result.jsonify(registry_update)
 
     @token_required
@@ -351,8 +343,21 @@ class MethodsApi(MethodView):
             return self.nonexistent_id
         deleted_data = registry_delete.delete()
         if not deleted_data:
-            return self.databse_err
+            return self.databse_err("delete")
         return self.Result.jsonify(registry_delete)
+
+    @staticmethod
+    def databse_err(action: str = "insert") -> jsonify:
+        return jsonify(
+            {
+                "Err": f"Error trying to {action} data",
+                "Possibilities": {
+                    "1": "Data integrity error",
+                    "2": "Could not connect to DB",
+                    "3": "The action could not be performed due to an error in the request",
+                    "4": "Some other error "
+                }
+            }), 409
 EOF
 
 cat > routes/create_routesStandars.py <<EOF
