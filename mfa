@@ -225,6 +225,7 @@ class Standard:
         try:
             db.session.commit()
         except exc.SQLAlchemyError:
+            db.session.rollback()
             return False
         return True
 EOF
@@ -269,7 +270,7 @@ class MethodsApi(MethodView):
         self.nonexistent_id = jsonify({"Message": "record nonexistent"}), 404
 
     @token_required
-    def get(self, id=None):
+    def get(self, current_user, id=None):
         nonexistent_items = jsonify(
             {"Message": "No There are no items for this query"}), 404
         if id:
@@ -318,7 +319,7 @@ class MethodsApi(MethodView):
             return self.add()
 
     @token_required
-    def add(self):
+    def add(self, current_user):
         new_registry = self.Table(request.json)
         insert_correct_data = new_registry.save()
         if not insert_correct_data:
@@ -326,7 +327,7 @@ class MethodsApi(MethodView):
         return self.Result.jsonify(new_registry), 201
 
     @token_required
-    def put(self, id=None):
+    def put(self, current_user, id):
         registry_update = self.Table.query.get(id)
         if not registry_update:
             return self.nonexistent_id
@@ -337,7 +338,7 @@ class MethodsApi(MethodView):
         return self.Result.jsonify(registry_update)
 
     @token_required
-    def delete(self, id):
+    def delete(self, current_user, id):
         registry_delete = self.Table.query.get(id)
         if not registry_delete:
             return self.nonexistent_id
@@ -417,10 +418,10 @@ def token_required(fn):
 
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'])
-            TableExample.query.filter_by(id=data['id']).first()
-        except jwt.ExpiredSignature:
+            current_user = TableExample.query.filter_by(id=data['id']).first()
+        except (jwt.ExpiredSignature, jwt.InvalidSignatureError):
             return jsonify({'message': 'Token is invalid!'}), 401
-        return fn(*args, **kwargs)
+        return fn(*args, current_user, **kwargs)
     return wrapper
 
 
@@ -467,9 +468,9 @@ class TableExample(db.Model, Standard):
 
 
 class TableExample_Schema(ma.Schema):
-    name = ma.Str(validate=validate.Length(min=1))
-    email = ma.Email()
-    password = ma.Str(validate=validate.Length(min=4), load_only=True)
+    name = ma.Str(validate=validate.Length(min=1), required=True)
+    email = ma.Email(required=True)
+    password = ma.Str(validate=validate.Length(min=4), load_only=True, required=True)
 
     class Meta:
         fields = ('id', 'name', 'email', 'password')
@@ -480,7 +481,7 @@ from . import example
 from models.table_example import TableExample, TableExample_Schema
 from routes.create_routesStandars import create_routes
 
-create_routes(TableExample, TableExample_Schema, example, "example")
+create_routes(TableExample, TableExample_Schema, example, "example", True)
 EOF
 }
 poetry_install () {
