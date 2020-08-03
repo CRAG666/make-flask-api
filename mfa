@@ -258,13 +258,14 @@ import jwt
 from flask import current_app as app
 import datetime
 from helpers.validations import token_required, validate_json
+from models import ma
 
 
 class MethodsApi(MethodView):
     def __init__(self, table, table_schema):
         self.Table = table
-        self.Result = table_schema()
-        self.Results = table_schema(many=True)
+        self.Result: ma.Schema = table_schema()
+        self.Results: ma.Schema = table_schema(many=True)
         self.put = validate_json(self.Result)(self.put)
         self.add = validate_json(self.Result)(self.add)
         self.nonexistent_id = jsonify({"Message": "record nonexistent"}), 404
@@ -272,7 +273,7 @@ class MethodsApi(MethodView):
     @token_required
     def get(self, current_user, id=None):
         nonexistent_items = jsonify(
-            {"Message": "No There are no items for this query"}), 404
+            {"Message": f"{current_user} No There are no items for this query"}), 404
         if id:
             one_registry = self.Table.query.filter_by(id=id).first()
             if one_registry:
@@ -282,7 +283,7 @@ class MethodsApi(MethodView):
             p_busqueda = request.args.to_dict()
             if 'page' in p_busqueda.keys():
                 page = int(p_busqueda['page'])
-                per_page = int(p_busqueda['size']) if 'size' in p_busqueda.keys() else 10
+                per_page = int(p_busqueda.get('size', 10))
                 paginar = self.Table.query.paginate(page, per_page, False)
                 if not paginar.items:
                     return nonexistent_items
@@ -363,9 +364,11 @@ EOF
 
 cat > routes/create_routesStandars.py <<EOF
 from routes.api_template import MethodsApi
+from flask import Blueprint
+from models import ma, db
 
 
-def create_routes(table: object, table_scheme: object, blueprint_name: object, noun: str, login: bool = False):
+def create_routes(table: db.Model, table_scheme: ma.Schema, blueprint_name: Blueprint, noun: str, login: bool = False):
     view_func = MethodsApi.as_view(
         f"{noun}_api",
         table,
@@ -379,12 +382,12 @@ def create_routes(table: object, table_scheme: object, blueprint_name: object, n
 
 
 def get_endpoints(noun: str, login: bool):
-    endpont_list = [
+    endpoint_list = [
         [f'/api/{noun}/', ['POST', 'GET']],
         [f'/api/{noun}/<int:id>', ['GET', 'PUT', 'DELETE']]]
     if login:
-        endpont_list.insert(0, [f'/api/{noun}/login', ['POST']])
-    return endpont_list
+        endpoint_list.insert(0, [f'/api/{noun}/login', ['POST']])
+    return endpoint_list
 EOF
 
 cat > requirements.txt << EOF
@@ -402,6 +405,7 @@ from flask import current_app as app
 from flask import jsonify, request
 import jwt
 from functools import wraps
+from models import ma
 from models.table_example import TableExample
 from marshmallow import ValidationError
 
@@ -409,9 +413,7 @@ from marshmallow import ValidationError
 def token_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        token = None
-        if 'x-access-token' in request.headers:
-            token = request.headers['x-access-token']
+        token: str = request.headers.get('x-access-token', None)
 
         if not token:
             return jsonify({'message': 'Token is missing!'}), 401
@@ -425,7 +427,7 @@ def token_required(fn):
     return wrapper
 
 
-def validate_json(schema):
+def validate_json(schema: ma.Schema):
     def inner_function(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
@@ -455,9 +457,9 @@ class TableExample(db.Model, Standard):
         self.changes(fields)
 
     def changes(self, fields: dict):
-        self.name = fields['name']
-        self.password = self.__generate_password(fields['password'])
-        self.email = fields['email']
+        self.name = fields.get('name')
+        self.password = self.__generate_password(fields.get('password'))
+        self.email = fields.get('email')
 
     @staticmethod
     def __generate_password(password: str) -> str:
