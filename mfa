@@ -279,22 +279,22 @@ class MethodsApi(MethodView):
             if one_registry:
                 return self.Result.jsonify(one_registry)
             return self.nonexistent_id
-        else:
-            p_busqueda = request.args.to_dict()
-            if 'page' in p_busqueda.keys():
-                page = int(p_busqueda['page'])
-                per_page = int(p_busqueda.get('size', 10))
-                paginar = self.Table.query.paginate(page, per_page, False)
-                if not paginar.items:
-                    return nonexistent_items
-                return jsonify(
-                    {"Result": self.Results.dump(paginar.items),
-                     "total-pages": paginar.pages})
-            else:
-                all_registrys = self.Table.query.all()
-                if not all_registrys:
-                    return nonexistent_items
-                return self.Results.jsonify(all_registrys)
+
+        p_busqueda = request.args.to_dict()
+        if 'page' in p_busqueda.keys():
+            page = int(p_busqueda.get('page'))
+            per_page = int(p_busqueda.get('size', 10))
+            paginar = self.Table.query.paginate(page, per_page, False)
+            if not paginar.items:
+                return nonexistent_items
+            return jsonify(
+                {"Result": self.Results.dump(paginar.items),
+                 "total-pages": paginar.pages})
+
+        all_registrys = self.Table.query.all()
+        if not all_registrys:
+            return nonexistent_items
+        return self.Results.jsonify(all_registrys)
 
     def post(self):
         rute = str(request.url_rule)
@@ -316,8 +316,7 @@ class MethodsApi(MethodView):
                 }, app.config['SECRET_KEY'])
                 return jsonify({'token' : token.decode('UTF-8')})
             return reserr, 401
-        else:
-            return self.add()
+        return self.add()
 
     @token_required
     def add(self, current_user):
