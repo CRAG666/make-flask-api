@@ -210,6 +210,7 @@ from flask import current_app as app
 db = SQLAlchemy()
 ma = Marshmallow()
 
+
 class Standard:
     def save(self) -> bool:
         db.session.add(self)
@@ -355,24 +356,26 @@ EOF
 
 cat > routes/create_routesStandars.py <<EOF
 from routes.api_template import MethodsApi
-from flask import Blueprint
-from models import ma, db
 
 
-def create_routes(table: db.Model, table_scheme: ma.Schema, blueprint_name: Blueprint, noun: str, login: bool = False):
+def create_routes(**kwargs):
     view_func = MethodsApi.as_view(
-        f"{noun}_api",
-        table,
-        table_scheme)
-    endpoints = get_endpoints(noun, login)
+        f"{kwargs.get('noun')}_api",
+        kwargs.get('table'),
+        kwargs.get('table_schema'))
+    endpoints = kwargs.get(
+        'endpoints',
+        get_endpoints(
+            kwargs.get('noun'),
+            kwargs.get('login_endpoint')))
     for i in endpoints:
-        blueprint_name.add_url_rule(
+        kwargs.get('blueprint').add_url_rule(
             i[0],
             methods=i[1],
             view_func=view_func)
 
 
-def get_endpoints(noun: str, login: bool):
+def get_endpoints(noun: str, login: bool) -> list:
     endpoint_list = [
         [f'/api/{noun}/', ['POST', 'GET']],
         [f'/api/{noun}/<int:id>', ['GET', 'PUT', 'DELETE']]]
@@ -474,7 +477,12 @@ from . import example
 from models.table_example import TableExample, TableExample_Schema
 from routes.create_routesStandars import create_routes
 
-create_routes(TableExample, TableExample_Schema, example, "example", True)
+create_routes(
+    table=TableExample,
+    table_schema=TableExample_Schema,
+    blueprint=example,
+    noun="example",
+    login_endpoint=True)
 EOF
 }
 poetry_install () {
