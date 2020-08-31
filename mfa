@@ -173,7 +173,7 @@ EOF
 cat > run.py << EOF
 from server import app
 from models import ma
-from models.database_init import db, create_database
+from models import db, create_database
 
 
 if __name__ == "__main__":
@@ -206,12 +206,12 @@ cat > models/__init__.py << EOF
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from sqlalchemy import exc
+from flask import current_app as app
 db = SQLAlchemy()
 ma = Marshmallow()
 
-
 class Standard:
-    def save(self):
+    def save(self) -> bool:
         db.session.add(self)
         try:
             db.session.commit()
@@ -220,7 +220,7 @@ class Standard:
             return False
         return True
 
-    def delete(self):
+    def delete(self, *args) -> bool:
         db.session.delete(self)
         try:
             db.session.commit()
@@ -228,12 +228,6 @@ class Standard:
             db.session.rollback()
             return False
         return True
-EOF
-
-cat > models/database_init.py << EOF
-from flask import current_app as app
-from . import db
-from .table_example import TableExample
 
 
 def create_database():
@@ -241,9 +235,7 @@ def create_database():
     engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
 
 
-class TableExample(TableExample):
-    def __init__(self):
-        super(TableExample, self).__init__()
+from .table_example import TableExample
 EOF
 
 cat > routes/__init__.py << EOF
