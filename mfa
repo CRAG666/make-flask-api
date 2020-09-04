@@ -258,14 +258,14 @@ from models.Login import LoginSchema
 
 
 class MethodsApi(MethodView):
-    def __init__(self, table, table_schema, field_login: dict = None):
-        if field_login is None:
-            field_login = {}
-        self.field_login = field_login
+    def __init__(self, table, table_schema, customize_login: dict = None):
+        if customize_login is None:
+            customize_login = {}
+        self.customize_login = customize_login
         self.Table = table
         self.Result: ma.Schema = table_schema()
         self.Results: ma.Schema = table_schema(many=True)
-        self.login = validate_json(field_login.get("schema", LoginSchema)())(self.login)
+        self.login = validate_json(customize_login.get("schema", LoginSchema)())(self.login)
         self.put = validate_json(self.Result)(self.put)
         self.add = validate_json(self.Result)(self.add)
         self.nonexistent_id = jsonify({"Message": "record nonexistent"}), 404
@@ -303,20 +303,20 @@ class MethodsApi(MethodView):
         auth = request.json
         reserr = jsonify({'Authenticate': 'Could not verify'})
         search = {
-            self.field_login.get('field_search', "email"): auth[
-                self.field_login.get('field_search', "email")
+            self.customize_login.get('field_search', "Email"): auth[
+                self.customize_login.get('field_search', "Email")
             ]}
         table = self.Table.query.filter_by(**search).first()
 
         if not table:
             return reserr, 401
 
-        if table.compare_passwords(auth[self.field_login.get('password_field_name', "password")]):
+        if table.compare_passwords(auth[self.customize_login.get('password_field_name', "Password")]):
             token = jwt.encode({
                 'id': table.id,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
-            }, self.field_login.get('key_encrypt', app.config['SECRET_KEY']))
-            action = self.field_login.get('customize_login', False)
+            }, self.customize_login.get('key_encrypt', app.config['SECRET_KEY']))
+            action = self.customize_login.get('post_action', False)
             if action:
                 eval('action[0](' + action[1] + ')')
             return jsonify({'token': token.decode('UTF-8')})
@@ -342,14 +342,15 @@ class MethodsApi(MethodView):
     @token_required()
     def delete(self, current_user, id):
         registry_delete = self.Table.query.get_or_404(id)
-        deleted_data = registry_delete.delete()
+        deleted_data = registry_delete.delete(current_user)
         if not deleted_data:
             return self.databse_err("delete")
         return self.Result.jsonify(registry_delete)
 
     @staticmethod
     def databse_err(action: str = "insert") -> jsonify:
-        return jsonify({"Err": f"Error trying to {action} data"}), 409
+        return jsonify(
+            {"Err": f"Error trying to {action} data"}), 409
 EOF
 
 cat > routes/create_routesStandars.py <<EOF
@@ -388,11 +389,10 @@ EOF
 
 cat > requirements.txt << EOF
 flask
-flask_wtf
 flask_sqlalchemy
-mysqlclient
 flask_marshmallow
 marshmallow-sqlalchemy
+mysqlclient
 pyjwt
 EOF
 
@@ -535,11 +535,12 @@ cat > devcontainer.json << EOF
 EOF
 
 cat > Dockerfile << EOF
-FROM python:3.7-alpine
-RUN apk update
-RUN apk add mysql mysql-client mariadb-connector-c mariadb-dev
-RUN apk add --virtual build-deps gcc musl-dev
-RUN pip install flask flask_wtf flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy mysqlclient pyjwt
+FROM python:3.8-alpine
+RUN apk add --no-cache --purge -uU mysql mysql-client mariadb-connector-c mariadb-dev
+RUN apk add --no-cache --virtual build-deps gcc musl-dev
+RUN rm -rf /var/cache/apk/* /tmp/*
+RUN pip install --no-cache-dir flask flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy mysqlclient pyjwt
+RUN apk del build-deps mariadb-dev
 EXPOSE 3306
 EOF
 echo -e "\n\e[91m=>\e[0m \e[36m\uf308\e[0m Dokerfile Creado"
