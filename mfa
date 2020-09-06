@@ -306,19 +306,19 @@ class MethodsApi(MethodView):
             self.customize_login.get('field_search', "Email"): auth[
                 self.customize_login.get('field_search', "Email")
             ]}
-        table = self.Table.query.filter_by(**search).first()
+        user = self.Table.query.filter_by(**search).first()
 
-        if not table:
+        if not user:
             return reserr, 401
 
-        if table.compare_passwords(auth[self.customize_login.get('password_field_name', "Password")]):
+        if user.compare_passwords(auth[self.customize_login.get('password_field_name', "Password")]):
             token = jwt.encode({
-                'id': table.id,
+                'id': user.id,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
             }, self.customize_login.get('key_encrypt', app.config['SECRET_KEY']))
             action = self.customize_login.get('post_action', False)
             if action:
-                eval('action[0](' + action[1] + ')')
+                exec(f'action[0]({action[1]})')
             return jsonify({'token': token.decode('UTF-8')})
         return reserr, 401
 
