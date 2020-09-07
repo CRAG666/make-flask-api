@@ -164,7 +164,12 @@ def method_not_allowed(err):
     return jsonify({"Message": "The method is not allowed for the requested URL"})
 
 
-# * index route
+# * Error 401
+@app.errorhandler(401)
+@cross_origin()
+def method_not_allowed(err):
+    return jsonify({'Authenticate': 'Could not verify'})
+
 
 # * Routes
 app.register_blueprint(example)
@@ -247,7 +252,7 @@ example = Blueprint('example', __name__)
 EOF
 
 cat > routes/api_template.py << EOF
-from flask import jsonify, request
+from flask import jsonify, request, abort
 from flask.views import MethodView
 import jwt
 from flask import current_app as app
@@ -268,12 +273,10 @@ class MethodsApi(MethodView):
         self.login = validate_json(customize_login.get("schema", LoginSchema)())(self.login)
         self.put = validate_json(self.Result)(self.put)
         self.add = validate_json(self.Result)(self.add)
-        self.nonexistent_id = jsonify({"Message": "record nonexistent"}), 404
 
     @token_required()
     def get(self, current_user, id=None):
-        nonexistent_items = jsonify(
-            {"Message": f"{current_user} No There are no items for this query"}), 404
+        print(current_user)
         if id:
             one_registry = self.Table.query.get_or_404(id)
             return self.Result.jsonify(one_registry)
@@ -283,14 +286,14 @@ class MethodsApi(MethodView):
             per_page = int(request.args.get('size', 10))
             paginar = self.Table.query.paginate(page, per_page, False)
             if not paginar.items:
-                return nonexistent_items
+                abort(404)
             return jsonify(
                 {"Result": self.Results.dump(paginar.items),
                  "total-pages": paginar.pages})
 
         all_registrys = self.Table.query.all()
         if not all_registrys:
-            return nonexistent_items
+            abort(404)
         return self.Results.jsonify(all_registrys)
 
     def post(self):
@@ -301,17 +304,17 @@ class MethodsApi(MethodView):
 
     def login(self):
         auth = request.json
-        reserr = jsonify({'Authenticate': 'Could not verify'})
         search = {
-            self.customize_login.get('field_search', "Email"): auth[
-                self.customize_login.get('field_search', "Email")
+            self.customize_login.get('field_search', "email"): auth[
+                self.customize_login.get('field_search', "email")
             ]}
+
         user = self.Table.query.filter_by(**search).first()
 
         if not user:
-            return reserr, 401
+            abort(401)
 
-        if user.compare_passwords(auth[self.customize_login.get('password_field_name', "Password")]):
+        if user.compare_passwords(auth[self.customize_login.get('password_field_name', "password")]):
             token = jwt.encode({
                 'id': user.id,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
@@ -320,11 +323,11 @@ class MethodsApi(MethodView):
             if action:
                 exec(f'action[0]({action[1]})')
             return jsonify({'token': token.decode('UTF-8')})
-        return reserr, 401
+        abort(401)
 
     @token_required()
     def add(self, current_user):
-        new_registry = self.Table(request.json)
+        new_registry = self.Table(request.json, current_user)
         insert_correct_data = new_registry.save()
         if not insert_correct_data:
             return self.databse_err()
@@ -333,7 +336,7 @@ class MethodsApi(MethodView):
     @token_required()
     def put(self, current_user, id):
         registry_update = self.Table.query.get_or_404(id)
-        registry_update.changes(request.json)
+        registry_update.changes(request.json, current_user)
         update_correct_data = registry_update.save()
         if not update_correct_data:
             return self.databse_err("update")
