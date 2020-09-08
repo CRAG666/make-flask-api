@@ -166,7 +166,6 @@ def method_not_allowed(err):
 
 # * Error 401
 @app.errorhandler(401)
-@cross_origin()
 def method_not_allowed(err):
     return jsonify({'Authenticate': 'Could not verify'})
 
@@ -203,7 +202,7 @@ class DevelopmentConfig(Config):
     DEBUG = True
     EGINE_URI = 'mysql://root:' + environ['passmaria'] + '@localhost'
     # * EGINE_URI = 'mysql://root:@localhost'
-    DB_NAME = 'ECU_app1'
+    DB_NAME = 'example_db'
     SQLALCHEMY_DATABASE_URI = f'{EGINE_URI}/{DB_NAME}'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     TABLE_VALIDATE_TOKEN = TableExample
@@ -539,10 +538,10 @@ EOF
 
 cat > Dockerfile << EOF
 FROM python:3.8-alpine
-RUN apk add --no-cache --purge -uU mysql mysql-client mariadb-connector-c mariadb-dev
+RUN apk add --no-cache --purge -uU mysql mysql-client mariadb-dev mariadb-connector-c
 RUN apk add --no-cache --virtual build-deps gcc musl-dev
 RUN rm -rf /var/cache/apk/* /tmp/*
-RUN pip install --no-cache-dir flask flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy mysqlclient pyjwt
+RUN pip install flask flask_sqlalchemy flask_marshmallow marshmallow-sqlalchemy mysqlclient pyjwt flask-cors
 RUN apk del build-deps mariadb-dev
 EXPOSE 3306
 EOF
