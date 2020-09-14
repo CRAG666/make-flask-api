@@ -145,47 +145,60 @@ tempCodeRunnerFile.py
 EOF
 
 cat > server.py << EOF
-from flask import Flask, jsonify
-from config import DevelopmentConfig
-from routes.example_routes import example
-app = Flask(__name__)
-app.config.from_object(DevelopmentConfig)
+from flask import Flask
 
 
-# * Error 404
-@app.errorhandler(404)
-def page_not_found(err):
-    return jsonify({"Message": "This page could not be found"})
+def create_app(config_class):
+    from routes.users_routes import users
+    from routes.notes_routes import notes
+    app = Flask(__name__)
+    app.config.from_object(config_class)
+    register_errorhandlers(app)
+    register_blueprints(app, users, notes)
+    register_extensions(app)
+    return app
 
 
-# * Error 405
-@app.errorhandler(405)
-def method_not_allowed(err):
-    return jsonify({"Message": "The method is not allowed for the requested URL"})
+def register_blueprints(app: Flask, *args):
+    for blueprint in args:
+        app.register_blueprint(blueprint)
 
 
-# * Error 401
-@app.errorhandler(401)
-def method_not_allowed(err):
-    return jsonify({'Authenticate': 'Could not verify'})
-
-
-# * Routes
-app.register_blueprint(example)
-EOF
-
-cat > run.py << EOF
-from server import app
-from models import ma
-from models import db, create_database
-
-
-if __name__ == "__main__":
+def register_extensions(app: Flask):
+    from models import ma
+    from models import db, create_database
     db.init_app(app)
     ma.init_app(app)
     with app.app_context():
         create_database()
         db.create_all()
+
+
+def register_errorhandlers(app: Flask):
+    from flask import jsonify
+    # * Error 404
+    @app.errorhandler(404)
+    def page_not_found(err):
+        return jsonify({"Message": "This page could not be found"}), 404
+
+    # * Error 405
+    @app.errorhandler(405)
+    def method_not_allowed(err):
+        return jsonify({"Message": "The method is not allowed for the requested URL"}), 405
+
+    # * Error 401
+    @app.errorhandler(401)
+    def method_not_unauthorized(err):
+        return jsonify({'Authenticate': 'Could not verify'}), 401
+EOF
+
+cat > run.py << EOF
+from server import create_app
+from config import DevelopmentConfig
+
+app = create_app(DevelopmentConfig)
+
+if __name__ == "__main__":
     app.run()
 EOF
 
@@ -217,7 +230,8 @@ db = SQLAlchemy()
 ma = Marshmallow()
 
 
-class Standard:
+class DBUtils:
+    """ Utils for database"""
     def save(self) -> bool:
         db.session.add(self)
         try:
@@ -226,6 +240,14 @@ class Standard:
             db.session.rollback()
             return False
         return True
+
+    @staticmethod
+    def get_by_id(table, id, *args):
+        return db.session.query(table).get_or_404(id)
+
+    @staticmethod
+    def all(table, *args):
+        return db.session.query(table).all()
 
     def delete(self, *args) -> bool:
         db.session.delete(self)
@@ -238,9 +260,9 @@ class Standard:
 
 
 def create_database():
+    """Crate database"""
     engine = db.create_engine(app.config['EGINE_URI'], {})
     engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
-
 
 from .table_example import TableExample
 EOF
@@ -257,27 +279,51 @@ import jwt
 from flask import current_app as app
 import datetime
 from helpers.validations import token_required, validate_json
-from models import ma
+from models import ma, db
 from models.Login import LoginSchema
 
 
 class MethodsApi(MethodView):
-    def __init__(self, table, table_schema, customize_login: dict = None):
+    """ Class for control to endpoints """
+    def __init__(self, table: db.Model, table_schema: ma.Schema, customize_login: dict = None):
+        """Contructor
+
+        Args:
+            table (db.Model): sqlalchemy model
+            table_schema (ma.Schema): marshmallow schema
+            customize_login (dict, optional):
+                {
+                    schema (ma.Schema): marshmallow scheme to validate the login. Defaults to LoginSchema
+                    field_search (str): field name to search in db
+                    password_field_name (str): field name for password
+                    key_encrypt (str): key to create jwt token. Default to app.config['SECRET_KEY']
+                    post_action (tuple): Receive a tuple with two elements. The first is the function to be executed after the creation of the token, the second corresponds to the parameters received by the function in str. Default to False
+                }
+        """
         if customize_login is None:
             customize_login = {}
         self.customize_login = customize_login
         self.Table = table
-        self.Result: ma.Schema = table_schema()
-        self.Results: ma.Schema = table_schema(many=True)
+        self.Result = table_schema()
+        self.Results = table_schema(many=True)
         self.login = validate_json(customize_login.get("schema", LoginSchema)())(self.login)
         self.put = validate_json(self.Result)(self.put)
         self.add = validate_json(self.Result)(self.add)
 
     @token_required()
     def get(self, current_user, id=None):
-        print(current_user)
+        """Method http GET
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+            id (int, optional): ID registration. Defaults to None.
+
+        Returns:
+            json: many or one registry
+            http error: corresponding code http error
+        """
         if id:
-            one_registry = self.Table.query.get_or_404(id)
+            one_registry = self.Table.get_by_id(self.Table, id, current_user)
             return self.Result.jsonify(one_registry)
 
         if 'page' in request.args.keys():
@@ -287,21 +333,27 @@ class MethodsApi(MethodView):
             if not paginar.items:
                 abort(404)
             return jsonify(
-                {"Result": self.Results.dump(paginar.items),
+                {"results": self.Results.dump(paginar.items),
                  "total-pages": paginar.pages})
 
-        all_registrys = self.Table.query.all()
-        if not all_registrys:
+        registrys_list = self.Table.all(self.Table, current_user)
+        if not registrys_list:
             abort(404)
-        return self.Results.jsonify(all_registrys)
+        return jsonify({"results": self.Results.dump(registrys_list)})
 
     def post(self):
+        """ Method http GET """
         rute = str(request.url_rule)
         if rute.find('login') != -1:
             return self.login()
         return self.add()
 
     def login(self):
+        """Create new session and execute post action(optional)
+
+        Returns:
+            token (json): jwt
+        """
         auth = request.json
         search = {
             self.customize_login.get('field_search', "email"): auth[
@@ -326,6 +378,14 @@ class MethodsApi(MethodView):
 
     @token_required()
     def add(self, current_user):
+        """ Add new record
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+
+        Returns:
+            json: registry created
+        """
         new_registry = self.Table(request.json, current_user)
         insert_correct_data = new_registry.save()
         if not insert_correct_data:
@@ -334,7 +394,16 @@ class MethodsApi(MethodView):
 
     @token_required()
     def put(self, current_user, id):
-        registry_update = self.Table.query.get_or_404(id)
+        """ Edit record
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+            id (int, optional): ID registration
+
+        Returns:
+            json: edited record
+        """
+        registry_update = self.Table.get_by_id(self.Table, id, current_user)
         registry_update.changes(request.json, current_user)
         update_correct_data = registry_update.save()
         if not update_correct_data:
@@ -343,7 +412,16 @@ class MethodsApi(MethodView):
 
     @token_required()
     def delete(self, current_user, id):
-        registry_delete = self.Table.query.get_or_404(id)
+        """ Delete record
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+            id (int, optional): ID registration
+
+        Returns:
+            json: deleted record
+        """
+        registry_delete = self.Table.get_by_id(self.Table, id, current_user)
         deleted_data = registry_delete.delete(current_user)
         if not deleted_data:
             return self.databse_err("delete")
@@ -360,6 +438,35 @@ from routes.api_template import MethodsApi
 
 
 def create_routes(**kwargs):
+    """Create routes standars
+    Args:
+        **kwargs: Arbitrary keyword arguments.
+
+    Keyword Args:
+        blueprint (object): blueprint or object flask app
+        noun (str): noun to create endpoints and method view name.
+        table (db.Model): sqlalchemy model.
+        table_schema (ma.Schema): marshmallow schema.
+        login_endpoint (bool, optional): Create login endpoint. Defaullt to False.
+        customize_login (dict, optional): receives configuration parameters to login. Defaults to None.
+        endpoints (list, optional): List to endpoints ([['/url', ['GET']]]). Default generate endpoints with noun.
+    Examples:
+        basic usage:
+            create_routes(
+                table=SomeModel,
+                table_schema=SomeSchema,
+                blueprint=some_blueprint,
+                noun="v1/somenoun",
+                login_endpoint=True)
+
+        customize endpoints:
+            create_routes(
+                table=SomeModel,
+                table_schema=SomeSchema,
+                blueprint=some_blueprint,
+                noun="v1/somenoun",
+                endpoints=[['/api/v1/somenoun', ['GET','POST'])
+    """
     view_func = MethodsApi.as_view(
         f"{kwargs.get('noun')}_api",
         kwargs.get('table'),
@@ -408,6 +515,13 @@ from marshmallow import ValidationError
 
 
 def token_required(**parameters):
+    """ Validate jwt token
+    Args:
+        **kwargs: Arbitrary keyword arguments.
+    Parameters Args:
+        table: Registered Users Lookup Table. Default to app.config['TABLE_VALIDATE_TOKEN']
+        key: key to decipher jwt token. Default to app.config['SECRET_KEY']
+    """
     def inner_function(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
@@ -430,6 +544,11 @@ def token_required(**parameters):
 
 
 def validate_json(schema: ma.Schema):
+    """ Validate json sent
+
+    Args:
+        schema (ma.Schema): marshmallow Schema for validate json
+    """
     def inner_function(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
@@ -443,12 +562,12 @@ def validate_json(schema: ma.Schema):
 EOF
 
 cat > models/table_example.py << EOF
-from . import db, ma, Standard
+from . import db, ma, DBUtils
 from werkzeug.security import generate_password_hash, check_password_hash
 from marshmallow import validate
 
 
-class TableExample(db.Model, Standard):
+class TableExample(db.Model, DBUtils):
     __tablename__ = 'TableExample'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
