@@ -149,12 +149,11 @@ from flask import Flask
 
 
 def create_app(config_class):
-    from routes.users_routes import users
-    from routes.notes_routes import notes
+    from routes.example_routes import example
     app = Flask(__name__)
     app.config.from_object(config_class)
     register_errorhandlers(app)
-    register_blueprints(app, users, notes)
+    register_blueprints(app, example)
     register_extensions(app)
     return app
 
