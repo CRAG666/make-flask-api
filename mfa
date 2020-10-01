@@ -248,6 +248,14 @@ class DBUtils:
     def all(table, *args):
         return db.session.query(table).all()
 
+    @staticmethod
+    def paginate(table, page, per_page, *args):
+        paginar = table.query.paginate(page, per_page, False)
+        if paginar.items:
+            return paginar
+        else:
+            return abort(404)
+
     def delete(self, *args) -> bool:
         db.session.delete(self)
         try:
@@ -262,6 +270,7 @@ def create_database():
     """Crate database"""
     engine = db.create_engine(app.config['EGINE_URI'], {})
     engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
+
 
 from .table_example import TableExample
 EOF
@@ -322,23 +331,30 @@ class MethodsApi(MethodView):
             http error: corresponding code http error
         """
         if id:
-            one_registry = self.Table.get_by_id(self.Table, id, current_user)
-            return self.Result.jsonify(one_registry)
+            self.get_by_id(current_user, id)
 
-        if 'page' in request.args.keys():
-            page = int(request.args.get('page'))
+        elif 'page' in request.args.keys():
+            page = int(request.args['page'])
             per_page = int(request.args.get('size', 10))
-            paginar = self.Table.query.paginate(page, per_page, False)
-            if not paginar.items:
-                abort(404)
-            return jsonify(
-                {"results": self.Results.dump(paginar.items),
-                 "total-pages": paginar.pages})
+            self.get_pagination(page, per_page, current_user)
 
-        registrys_list = self.Table.all(self.Table, current_user)
-        if not registrys_list:
-            abort(404)
+        self.get_all(current_user)
+
+    def get_all(self, current_user):
+        registrys_list = self.Table.all(
+            self.Table,
+            current_user)
         return jsonify({"results": self.Results.dump(registrys_list)})
+
+    def get_by_id(self, current_user: object, id: int):
+        one_registry = self.Table.get_by_id(self.Table, id, current_user)
+        return self.Result.jsonify(one_registry)
+
+    def get_pagination(self, page, per_page, current_user):
+        paginar = self.Table.query.paginate(self.Table, page, per_page, current_user)
+        return jsonify(
+            {"results": self.Results.dump(paginar.items),
+                "total-pages": paginar.pages})
 
     def post(self):
         """ Method http GET """
