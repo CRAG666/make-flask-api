@@ -251,7 +251,7 @@ class DBUtils:
 
     @staticmethod
     def paginate(table, page, per_page, *args):
-        paginar = table.query.paginate(page, per_page, False)
+        paginar = db.session.query(table).paginate(page, per_page, False)
         return paginar if paginar.items else abort(404)
 
     def delete(self, *args) -> bool:
