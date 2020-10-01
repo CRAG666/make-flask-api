@@ -224,7 +224,7 @@ cat > models/__init__.py << EOF
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from sqlalchemy import exc
-from flask import current_app as app
+from flask import abort, current_app as app
 db = SQLAlchemy()
 ma = Marshmallow()
 
@@ -246,15 +246,13 @@ class DBUtils:
 
     @staticmethod
     def all(table, *args):
-        return db.session.query(table).all()
+        list_records = db.session.query(table).all()
+        return list_records if list_records else abort(404)
 
     @staticmethod
     def paginate(table, page, per_page, *args):
         paginar = table.query.paginate(page, per_page, False)
-        if paginar.items:
-            return paginar
-        else:
-            return abort(404)
+        return paginar if paginar.items else abort(404)
 
     def delete(self, *args) -> bool:
         db.session.delete(self)
