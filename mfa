@@ -329,14 +329,14 @@ class MethodsApi(MethodView):
             http error: corresponding code http error
         """
         if id:
-            self.get_by_id(current_user, id)
+            return self.get_by_id(current_user, id)
 
         elif 'page' in request.args.keys():
             page = int(request.args['page'])
             per_page = int(request.args.get('size', 10))
-            self.get_pagination(page, per_page, current_user)
+            return self.get_pagination(page, per_page, current_user)
 
-        self.get_all(current_user)
+        return self.get_all(current_user)
 
     def get_all(self, current_user):
         registrys_list = self.Table.all(
