@@ -148,12 +148,11 @@ cat > server.py << EOF
 from flask import Flask
 
 
-def create_app(config_class):
-    from routes.example_routes import example
+def create_app(config_class, *blueprints):
     app = Flask(__name__)
     app.config.from_object(config_class)
     register_errorhandlers(app)
-    register_blueprints(app, example)
+    register_blueprints(app, *blueprints)
     register_extensions(app)
     return app
 
@@ -166,6 +165,7 @@ def register_blueprints(app: Flask, *args):
 def register_extensions(app: Flask):
     from models import ma
     from models import db, create_database
+
     db.init_app(app)
     ma.init_app(app)
     with app.app_context():
@@ -175,347 +175,117 @@ def register_extensions(app: Flask):
 
 def register_errorhandlers(app: Flask):
     from flask import jsonify
+    from sqlalchemy.exc import SQLAlchemyError
+
+    # * Errors in db
+    @app.errorhandler(SQLAlchemyError)
+    def sql_alchemy_error(err):
+        app.logger.exception(err)
+        return jsonify({"Request body error": f"{err}"}), 400
+
+    @app.errorhandler(Exception)
+    def exception(err):
+        app.logger.exception(err)
+        return jsonify({"error": f"{err}"}), 400
+
+    # * Error 401
+    @app.errorhandler(401)
+    def method_not_unauthorized(err):
+        app.logger.exception(err)
+        return jsonify({"Authenticate": "Could not verify"}), 401
+
+    # * Error 403
+    @app.errorhandler(403)
+    def access_denied(err):
+        app.logger.exception(err)
+        return jsonify({"Permission": "Acces denied for this resource"}), 403
+
     # * Error 404
     @app.errorhandler(404)
     def page_not_found(err):
+        app.logger.exception(err)
         return jsonify({"Message": "This page could not be found"}), 404
 
     # * Error 405
     @app.errorhandler(405)
     def method_not_allowed(err):
-        return jsonify({"Message": "The method is not allowed for the requested URL"}), 405
-
-    # * Error 401
-    @app.errorhandler(401)
-    def method_not_unauthorized(err):
-        return jsonify({'Authenticate': 'Could not verify'}), 401
+        app.logger.exception(err)
+        return (
+            jsonify({"Message": "The method is not allowed for the requested URL"}),
+            405,
+        )
 EOF
 
 cat > run.py << EOF
 from server import create_app
-from config import DevelopmentConfig
+from config import DevConfig
+from routes.example_routes import example
 
-app = create_app(DevelopmentConfig)
+app = create_app(DevConfig, example)
 
 if __name__ == "__main__":
     app.run()
+
 EOF
 
 cat > config/__init__.py << EOF
-from os import environ
+
+"""Application configuration."""
+import os
 from models.table_example import TableExample
 
 
 class Config:
-    SECRET_KEY = "CRAG"
+    """Base configuration."""
 
-
-class DevelopmentConfig(Config):
-    DEBUG = True
-    EGINE_URI = 'mysql://root:' + environ['passmaria'] + '@localhost'
+    SECRET_KEY = os.environ.get("APP_SECRET", "secret-key")  # TODO: Change me
+    APP_DIR = os.path.abspath(os.path.dirname(__file__))  # This directory
+    PROJECT_ROOT = os.path.abspath(os.path.join(APP_DIR, os.pardir))
+    CACHE_TYPE = "simple"  # Can be "memcached", "redis", etc.
+    EGINE_URI = "mysql://root:" + os.environ["PASSMARIA"] + "@localhost"
     # * EGINE_URI = 'mysql://root:@localhost'
-    DB_NAME = 'example_db'
-    SQLALCHEMY_DATABASE_URI = f'{EGINE_URI}/{DB_NAME}'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     TABLE_VALIDATE_TOKEN = TableExample
-EOF
-
-cat > models/__init__.py << EOF
-from flask_sqlalchemy import SQLAlchemy
-from flask_marshmallow import Marshmallow
-from sqlalchemy import exc
-from flask import abort, current_app as app
-db = SQLAlchemy()
-ma = Marshmallow()
-
-
-class DBUtils:
-    """ Utils for database"""
-    def save(self) -> bool:
-        db.session.add(self)
-        try:
-            db.session.commit()
-        except exc.SQLAlchemyError:
-            db.session.rollback()
-            return False
-        return True
-
-    @staticmethod
-    def get_by_id(table, id, *args):
-        return db.session.query(table).get_or_404(id)
-
-    @staticmethod
-    def all(table, *args):
-        list_records = db.session.query(table).all()
-        return list_records if list_records else abort(404)
-
-    @staticmethod
-    def paginate(table, page, per_page, *args):
-        paginar = db.session.query(table).paginate(page, per_page, False)
-        return paginar if paginar.items else abort(404)
-
-    def delete(self, *args) -> bool:
-        db.session.delete(self)
-        try:
-            db.session.commit()
-        except exc.SQLAlchemyError:
-            db.session.rollback()
-            return False
-        return True
+    CORS_ORIGIN_WHITELIST = [
+        "http://0.0.0.0:4100",
+        "http://localhost:4100",
+        "http://0.0.0.0:8000",
+        "http://localhost:8000",
+        "http://0.0.0.0:4200",
+        "http://localhost:4200",
+        "http://0.0.0.0:4000",
+        "http://localhost:4000",
+        "http://0.0.0.0:5000",
+        "http://localhost:5000",
+    ]
 
 
-def create_database():
-    """Crate database"""
-    engine = db.create_engine(app.config['EGINE_URI'], {})
-    engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
+class ProdConfig(Config):
+    """Production configuration."""
+
+    ENV = "prod"
+    DEBUG = False
+    DB_NAME = "example"
+    SQLALCHEMY_DATABASE_URI = f"{Config.EGINE_URI}/{DB_NAME}"
 
 
-from .table_example import TableExample
-EOF
+class DevConfig(Config):
+    """Development configuration."""
 
-cat > routes/__init__.py << EOF
-from flask import Blueprint
-example = Blueprint('example', __name__)
-EOF
-
-cat > routes/api_template.py << EOF
-from flask import jsonify, request, abort
-from flask.views import MethodView
-import jwt
-from flask import current_app as app
-import datetime
-from helpers.validations import token_required, validate_json
-from models import ma, db
-from models.Login import LoginSchema
+    ENV = "dev"
+    DEBUG = True
+    DB_NAME = "example"
+    SQLALCHEMY_DATABASE_URI = f"{Config.EGINE_URI}/{DB_NAME}"
+    CACHE_TYPE = "simple"  # Can be "memcached", "redis", etc.
 
 
-class MethodsApi(MethodView):
-    """ Class for control to endpoints """
-    def __init__(self, table: db.Model, table_schema: ma.Schema, customize_login: dict = None):
-        """Contructor
+class TestConfig(Config):
+    """Test configuration."""
 
-        Args:
-            table (db.Model): sqlalchemy model
-            table_schema (ma.Schema): marshmallow schema
-            customize_login (dict, optional):
-                {
-                    schema (ma.Schema): marshmallow scheme to validate the login. Defaults to LoginSchema
-                    field_search (str): field name to search in db
-                    password_field_name (str): field name for password
-                    key_encrypt (str): key to create jwt token. Default to app.config['SECRET_KEY']
-                    post_action (tuple): Receive a tuple with two elements. The first is the function to be executed after the creation of the token, the second corresponds to the parameters received by the function in str. Default to False
-                }
-        """
-        if customize_login is None:
-            customize_login = {}
-        self.customize_login = customize_login
-        self.Table = table
-        self.Result = table_schema()
-        self.Results = table_schema(many=True)
-        self.login = validate_json(customize_login.get("schema", LoginSchema)())(self.login)
-        self.put = validate_json(self.Result)(self.put)
-        self.add = validate_json(self.Result)(self.add)
-
-    @token_required()
-    def get(self, current_user, id=None):
-        """Method http GET
-
-        Args:
-            current_user (object): Contains the data of the logged in user
-            id (int, optional): ID registration. Defaults to None.
-
-        Returns:
-            json: many or one registry
-            http error: corresponding code http error
-        """
-        if id:
-            return self.get_by_id(current_user, id)
-
-        elif 'page' in request.args.keys():
-            page = int(request.args['page'])
-            per_page = int(request.args.get('size', 10))
-            return self.get_pagination(page, per_page, current_user)
-
-        return self.get_all(current_user)
-
-    def get_all(self, current_user):
-        registrys_list = self.Table.all(
-            self.Table,
-            current_user)
-        return jsonify({"results": self.Results.dump(registrys_list)})
-
-    def get_by_id(self, current_user: object, id: int):
-        one_registry = self.Table.get_by_id(self.Table, id, current_user)
-        return self.Result.jsonify(one_registry)
-
-    def get_pagination(self, page, per_page, current_user):
-        paginar = self.Table.query.paginate(self.Table, page, per_page, current_user)
-        return jsonify(
-            {"results": self.Results.dump(paginar.items),
-                "total-pages": paginar.pages})
-
-    def post(self):
-        """ Method http GET """
-        rute = str(request.url_rule)
-        if rute.find('login') != -1:
-            return self.login()
-        return self.add()
-
-    def login(self):
-        """Create new session and execute post action(optional)
-
-        Returns:
-            token (json): jwt
-        """
-        auth = request.json
-        search = {
-            self.customize_login.get('field_search', "email"): auth[
-                self.customize_login.get('field_search', "email")
-            ]}
-
-        user = self.Table.query.filter_by(**search).first()
-
-        if not user:
-            abort(401)
-
-        if user.compare_passwords(auth[self.customize_login.get('password_field_name', "password")]):
-            token = jwt.encode({
-                'id': user.id,
-                'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
-            }, self.customize_login.get('key_encrypt', app.config['SECRET_KEY']))
-            action = self.customize_login.get('post_action', False)
-            if action:
-                exec(f'action[0]({action[1]})')
-            return jsonify({'token': token.decode('UTF-8')})
-        abort(401)
-
-    @token_required()
-    def add(self, current_user):
-        """ Add new record
-
-        Args:
-            current_user (object): Contains the data of the logged in user
-
-        Returns:
-            json: registry created
-        """
-        new_registry = self.Table(request.json, current_user)
-        insert_correct_data = new_registry.save()
-        if not insert_correct_data:
-            return self.databse_err()
-        return self.Result.jsonify(new_registry), 201
-
-    @token_required()
-    def put(self, current_user, id):
-        """ Edit record
-
-        Args:
-            current_user (object): Contains the data of the logged in user
-            id (int, optional): ID registration
-
-        Returns:
-            json: edited record
-        """
-        registry_update = self.Table.get_by_id(self.Table, id, current_user)
-        registry_update.changes(request.json, current_user)
-        update_correct_data = registry_update.save()
-        if not update_correct_data:
-            return self.databse_err("update")
-        return self.Result.jsonify(registry_update)
-
-    @token_required()
-    def delete(self, current_user, id):
-        """ Delete record
-
-        Args:
-            current_user (object): Contains the data of the logged in user
-            id (int, optional): ID registration
-
-        Returns:
-            json: deleted record
-        """
-        registry_delete = self.Table.get_by_id(self.Table, id, current_user)
-        deleted_data = registry_delete.delete(current_user)
-        if not deleted_data:
-            return self.databse_err("delete")
-        return self.Result.jsonify(registry_delete)
-
-    @staticmethod
-    def databse_err(action: str = "insert") -> jsonify:
-        return jsonify(
-            {"Err": f"Error trying to {action} data"}), 409
-EOF
-
-cat > routes/create_routesStandars.py <<EOF
-from routes.api_template import MethodsApi
-
-
-def create_routes(**kwargs):
-    """Create routes standars
-    Args:
-        **kwargs: Arbitrary keyword arguments.
-
-    Keyword Args:
-        blueprint (object): blueprint or object flask app
-        noun (str): noun to create endpoints and method view name.
-        table (db.Model): sqlalchemy model.
-        table_schema (ma.Schema): marshmallow schema.
-        login_endpoint (bool, optional): Create login endpoint. Defaullt to False.
-        customize_login (dict, optional): receives configuration parameters to login. Defaults to None.
-        endpoints (list, optional): List to endpoints ([['/url', ['GET']]]). Default generate endpoints with noun.
-    Examples:
-        basic usage:
-            create_routes(
-                table=SomeModel,
-                table_schema=SomeSchema,
-                blueprint=some_blueprint,
-                noun="v1/somenoun",
-                login_endpoint=True)
-
-        customize endpoints:
-            create_routes(
-                table=SomeModel,
-                table_schema=SomeSchema,
-                blueprint=some_blueprint,
-                noun="v1/somenoun",
-                endpoints=[['/api/v1/somenoun', ['GET','POST'])
-    """
-    view_func = MethodsApi.as_view(
-        f"{kwargs.get('noun')}_api",
-        kwargs.get('table'),
-        kwargs.get('table_schema'),
-        kwargs.get('customize_login')
-    )
-
-    endpoints = kwargs.get(
-        'endpoints',
-        get_endpoints(
-            kwargs.get('noun'),
-            kwargs.get('login_endpoint', False)))
-
-    for i in endpoints:
-        kwargs.get('blueprint').add_url_rule(
-            i[0],
-            methods=i[1],
-            view_func=view_func)
-
-
-def get_endpoints(noun: str, login: bool) -> list:
-    endpoint_list = [
-        [f'/api/{noun}/', ['POST', 'GET']],
-        [f'/api/{noun}/<int:id>', ['GET', 'PUT', 'DELETE']]]
-    if login:
-        endpoint_list.insert(0, [f'/api/{noun}/login', ['POST']])
-    return endpoint_list
-EOF
-
-cat > requirements.txt << EOF
-flask
-flask_sqlalchemy
-flask_marshmallow
-marshmallow-sqlalchemy
-mysqlclient
-pyjwt
+    TESTING = True
+    DEBUG = True
+    DB_NAME = "TestExample"
+    SQLALCHEMY_DATABASE_URI = f"{Config.EGINE_URI}/{DB_NAME}"
 EOF
 
 cat > helpers/validations.py << EOF
@@ -523,7 +293,7 @@ from flask import current_app as app
 from flask import jsonify, request
 import jwt
 from functools import wraps
-from models import ma
+from models import Schema
 from marshmallow import ValidationError
 
 
@@ -556,11 +326,11 @@ def token_required(**parameters):
     return inner_function
 
 
-def validate_json(schema: ma.Schema):
+def validate_json(schema: Schema):
     """ Validate json sent
 
     Args:
-        schema (ma.Schema): marshmallow Schema for validate json
+        schema (Schema): marshmallow Schema for validate json
     """
     def inner_function(f):
         @wraps(f)
@@ -568,29 +338,148 @@ def validate_json(schema: ma.Schema):
             try:
                 schema.load(request.json)
             except ValidationError as err:
-                return err.messages
+                return err.messages, 400
             return f(*args, **kwargs)
         return wrapper
     return inner_function
+
+EOF
+
+cat > helpers/output.py << EOF
+from flask import jsonify
+from functools import wraps
+
+
+def response(f):
+    """ encrypt response """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        plain_json, error_code = f(*args, **kwargs)
+        return jsonify(plain_json), error_code
+
+    return wrapper
+
+EOF
+
+cat > models/__init__.py << EOF
+from flask_sqlalchemy import SQLAlchemy, Model
+from flask_marshmallow import Marshmallow
+from flask import abort, current_app as app
+from sqlalchemy import exc, event
+from datetime import datetime
+from werkzeug.security import generate_password_hash
+
+
+class DBUtils(Model):
+    """ Utils for database"""
+
+    def save(self):
+        """ Save new record """
+        db.session.add(self)
+        try:
+            db.session.commit()
+        except exc.SQLAlchemyError:
+            db.session.rollback()
+            raise exc.SQLAlchemyError("Error trying to save or update resource")
+
+    @classmethod
+    def get_by_id(cls, id, *args):
+        """get record for id
+
+        Args:
+            table(Model): table for search
+            id: id for search
+            args: other arguments
+        Returns:
+            object: requested data
+            int: http error 404
+        """
+        return cls.query.get_or_404(id)
+
+    @classmethod
+    def all(cls, *args):
+        """get all records
+
+        Args:
+            table(Model): table for search
+            args: other arguments
+        Returns:
+            object: requested records
+            int: http error 404
+        """
+        list_records = cls.query.all()
+        return list_records if list_records else abort(404)
+
+    @classmethod
+    def paginate(cls, page: int, per_page: int, *args):
+        """paginate all records
+
+        Args:
+            table(Model): table for search
+            page(int): size to page
+            per_page(int): page to show
+            args: other arguments
+        Returns:
+            object: requested records
+            int: http error 404
+        """
+        paginate = cls.query.paginate(page, per_page, False)
+        return paginate if paginate.items else abort(404)
+
+    def delete(self, *args):
+        """ Delete record """
+        db.session.delete(self)
+        try:
+            db.session.commit()
+        except exc.SQLAlchemyError:
+            db.session.rollback()
+            raise exc.SQLAlchemyError("Error trying to delete resource")
+
+
+db = SQLAlchemy(model_class=DBUtils)
+ma = Marshmallow()
+Model = db.Model
+Schema = ma.Schema
+
+
+def create_database():
+    """Crate database"""
+    engine = db.create_engine(app.config["EGINE_URI"], {})
+    engine.execute(f"CREATE DATABASE IF NOT EXISTS {app.config['DB_NAME']}")
+
+
+from .table_example import TableExample
+
+EOF
+
+cat > models/login.py << EOF
+from . import ma, Schema
+from marshmallow import validate
+
+
+class LoginSchema(Schema):
+    email = ma.Email(required=True)
+    password = ma.Str(validate=validate.Length(min=8), required=True)
 EOF
 
 cat > models/table_example.py << EOF
-from . import db, ma, DBUtils
+from . import db, Model, ma, Schema
 from werkzeug.security import generate_password_hash, check_password_hash
 from marshmallow import validate
 
 
-class TableExample(db.Model, DBUtils):
+class TableExample(Model):
     __tablename__ = 'TableExample'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
 
-    def __init__(self, fields: dict):
+    def __init__(self, fields: dict, *args):
         self.changes(fields)
 
-    def changes(self, fields: dict):
+    def changes(self, fields: dict, *args):
         self.name = fields.get('name')
         self.password = self.__generate_password(fields.get('password'))
         self.email = fields.get('email')
@@ -603,7 +492,7 @@ class TableExample(db.Model, DBUtils):
         return check_password_hash(self.password, password)
 
 
-class TableExample_Schema(ma.Schema):
+class TableExample_Schema(Schema):
     name = ma.Str(validate=validate.Length(min=1), required=True)
     email = ma.Email(required=True)
     password = ma.Str(validate=validate.Length(min=4), load_only=True, required=True)
@@ -612,28 +501,341 @@ class TableExample_Schema(ma.Schema):
         fields = ('id', 'name', 'email', 'password')
 EOF
 
-cat > models/Login.py << EOF
-from . import ma
-from marshmallow import validate
-
-
-class LoginSchema(ma.Schema):
-    email = ma.Email(required=True)
-    password = ma.Str(validate=validate.Length(min=8), required=True)
+cat > routes/__init__.py << EOF
+from flask import Blueprint
+example = Blueprint('example', __name__)
 EOF
 
 cat > routes/example_routes.py << EOF
 from . import example
 from models.table_example import TableExample, TableExample_Schema
-from routes.create_routesStandars import create_routes
+from routes.utils.create_routes import create_endpoints
 
-create_routes(
-    table=TableExample,
-    table_schema=TableExample_Schema,
-    blueprint=example,
-    noun="example",
-    login_endpoint=True)
+create_endpoints(
+    example,
+    "example",
+    TableExample,
+    TableExample_Schema,
+    login_endpoint=True
+)
 EOF
+
+cat > routes/utils/api_template.py << EOF
+from flask.views import MethodView
+from flask import current_app as app
+from models import Model, Schema
+from routes.utils.http_methods.get_request import GetRequest
+from routes.utils.http_methods.post_request import PostRequest
+from routes.utils.http_methods.put_request import PutRequest
+from routes.utils.http_methods.delete_request import DeleteRequest
+from config.login_config import LoginConfig
+
+
+class MethodsApi(MethodView, GetRequest, PostRequest, PutRequest, DeleteRequest):
+    """ Class for control to endpoints """
+
+    def __init__(
+        self, table_model: Model, table_schema: Schema, login_config: LoginConfig = None
+    ):
+        """Class for http methods
+
+        Args:
+            table_model (Model): sqlalchemy model
+            table_schema (Schema): marshmallow schema
+            login_config (LoginConfig): login config
+        """
+        result = table_schema()
+        results = table_schema(many=True)
+        if not login_config.key:
+            login_config.key = app.config["SECRET_KEY"]
+        GetRequest.__init__(self, table_model, result, results)
+        PostRequest.__init__(self, table_model, result, login_config)
+        PutRequest.__init__(self, table_model, result)
+        DeleteRequest.__init__(self, table_model, result)
+EOF
+
+cat > routes/utils/create_routes.py <<EOF
+from routes.utils.api_template import MethodsApi
+from config.login_config import LoginConfig
+
+
+def create_endpoints(
+    blueprint,
+    noun,
+    table_model,
+    table_schema,
+    login_endpoint=False,
+    login_config=LoginConfig(),
+    endpoints=[],
+):
+    """Create routes standars
+
+    Args:
+        blueprint (object): blueprint or object flask app
+        noun (str): noun to create endpoints and method view name.
+        table_model (Model): sqlalchemy model.
+        table_schema (Schema): marshmallow schema.
+        login_endpoint (bool, optional): Create login endpoint. Defaullt to False.
+        login_config (dict, optional): receives configuration parameters to login.
+        endpoints (list, optional): List to endpoints ([['/url', ['GET']]]). Default generate endpoints with noun.
+    Examples:
+        basic usage:
+            create_endpoints(
+                table_model=SomeModel,
+                table_schema=SomeSchema,
+                blueprint=some_blueprint,
+                noun="v1/somenoun",
+                login_endpoint=True)
+
+        customize endpoints:
+            create_endpoints(
+                table_model=SomeModel,
+                table_schema=SomeSchema,
+                blueprint=some_blueprint,
+                noun="v1/somenoun",
+                endpoints=[['/api/v1/somenoun', ['GET','POST']])
+    """
+    view_func = MethodsApi.as_view(f"{noun}_api", table_model, table_schema, login_config)
+
+    endpoint_list = endpoints if endpoints else get_endpoints(noun, login_endpoint)
+    for i in endpoint_list:
+        blueprint.add_url_rule(i[0], methods=i[1], view_func=view_func)
+
+
+def get_endpoints(noun: str, login: bool) -> list:
+    endpoint_list = [
+        [f"/api/{noun}/", ["POST", "GET"]],
+        [f"/api/{noun}/<int:id>", ["GET", "PUT", "DELETE"]],
+    ]
+    if login:
+        endpoint_list.insert(0, [f"/api/{noun}/login", ["POST"]])
+    return endpoint_list
+
+EOF
+
+cat > config/login_config.py << EOF
+import jwt
+import datetime
+from models.login import LoginSchema
+
+
+class LoginConfig:
+    def __init__(
+        self,
+        search_field="email",
+        password_field="password",
+        schema=LoginSchema,
+        key=None,
+    ):
+        self.search_field = search_field
+        self.password_field = password_field
+        self.schema = schema
+        self.__key = key
+
+    @property
+    def key(self):
+        """ get symmetric key """
+        return self.__key
+
+    @key.setter
+    def key(self, key):
+        """ set symmetric key """
+        self.__key = key
+
+    def create_token(self, model, auth_data: dict):
+        """Create new session and execute post action(optional)
+
+        Returns:
+            token (json): jwt
+        """
+        search_value = auth_data[self.search_field]
+        search_dict = {self.search_field: search_value}
+
+        user = model.query.filter_by(**search_dict).first()
+
+        if not user:
+            return {"Authenticate": "Could not verify"}, 401
+
+        password = auth_data[self.password_field]
+
+        if user.compare_passwords(password):
+            token = jwt.encode(
+                {
+                    "id": user.id,
+                    "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=30),
+                },
+                self.login_config.key,
+            )
+            return {"token": token.decode("UTF-8")}, 201
+        return {"Authenticate": "Could not verify"}, 401
+EOF
+
+cat > routes/utils/http_methods/delete_request.py << EOF
+from helpers.validations import token_required
+from helpers.output import response
+
+
+class DeleteRequest:
+    def __init__(self, table_model, result):
+        self.__table_model = table_model
+        self.__result = result
+
+    @token_required()
+    @response
+    def delete(self, current_user, id):
+        """Delete record
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+            id (int, optional): ID registration
+
+        Returns:
+            json: deleted record
+        """
+        registry_delete = self.__table_model.get_by_id(id, current_user)
+        registry_delete.delete(current_user)
+        return self.__result.dump(registry_delete), 200
+EOF
+
+cat > routes/utils/http_methods/get_request.py << EOF
+from helpers.validations import token_required
+from helpers.output import response
+from flask import request
+
+
+class GetRequest:
+    def __init__(self, table_model, result, results):
+        self.__table_model = table_model
+        self.__result = result
+        self.__results = results
+
+    @token_required()
+    @response
+    def get(self, current_user, id=None):
+        """Method http GET
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+            id (int, optional): ID registration. Defaults to None.
+
+        Returns:
+            json: many or one registry
+            http error: corresponding code http error
+        """
+        if id:
+            return self.get_by_id(current_user, id)
+
+        elif "page" in request.args.keys():
+            page = int(request.args.get("page", type=int, default=1))
+            per_page = int(request.args.get("size", type=int, default=10))
+            return self.get_pagination(page, per_page, current_user)
+
+        return self.get_all(current_user)
+
+    def get_all(self, current_user: object):
+        registrys_list = self.__table_model.all(current_user)
+        return {"results": self.__results.dump(registrys_list)}, 200
+
+    def get_by_id(self, current_user: object, id: int):
+        one_registry = self.__table_model.get_by_id(id, current_user)
+        return self.__result.dump(one_registry), 200
+
+    def get_pagination(self, page: int, per_page: int, current_user: object):
+        paginar = self.__table_model.paginate(page, per_page, current_user)
+        return {
+            "results": self.__results.dump(paginar.items),
+            "total-pages": paginar.pages,
+        }, 200
+EOF
+
+cat > routes/utils/http_methods/post_request.py << EOF
+import jwt
+import datetime
+from flask import request, abort
+from flask import current_app as app
+from helpers.validations import token_required, validate_json
+from helpers.output import response
+
+
+class PostRequest:
+    def __init__(self, table_model, result, login_config):
+        self.login_config = login_config
+        self.__table_model = table_model
+        self.login = validate_json(login_config.schema())(self.login)
+        self.add = validate_json(result)(self.add)
+        self.__result = result
+
+    def post(self):
+        """ Method http GET """
+        rute = str(request.url_rule)
+        if rute.find("login") != -1:
+            return self.login()
+        return self.add()
+
+    @response
+    def login(self):
+        """Create new session and execute post action(optional)
+
+        Returns:
+            token (json): jwt
+        """
+        return self.login_config.create_token(self.__table_model, request.json)
+
+    @token_required()
+    @response
+    def add(self, current_user):
+        """Add new record
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+
+        Returns:
+            json: registry created
+        """
+        new_registry = self.__table_model(request.json, current_user)
+        new_registry.save()
+        return self.__result.dump(new_registry), 201
+EOF
+
+cat > routes/utils/http_methods/put_request.py << EOF
+from flask import request
+from helpers.validations import token_required, validate_json
+from helpers.output import response
+
+
+class PutRequest:
+    def __init__(self, table_model, result):
+        self.__result = result
+        self.__table_model = table_model
+        self.put = validate_json(result)(self.put)
+
+    @token_required()
+    @response
+    def put(self, current_user, id):
+        """Edit record
+
+        Args:
+            current_user (object): Contains the data of the logged in user
+            id (int, optional): ID registration
+
+        Returns:
+            json: edited record
+        """
+        registry_update = self.__table_model.get_by_id(id, current_user)
+        registry_update.changes(request.json, current_user)
+        registry_update.save()
+        return self.__result.dump(registry_update), 200
+EOF
+
+cat > requirements.txt << EOF
+flask
+flask_sqlalchemy
+flask_marshmallow
+marshmallow-sqlalchemy
+mysqlclient
+pyjwt
+EOF
+
 }
 poetry_install () {
   poetry init -n
@@ -681,7 +883,7 @@ echo -e "\n\e[91m=>\e[0m \e[36m\uf308\e[0m Dokerfile Creado"
 }
 make_project (){
     echo -e "\e[34m=>\e[0m \e[96m\ue5fc\e[0m Folders Creados"
-    mkdir routes models helpers config
+    mkdir -p routes/utils/http_methods models helpers config
     echo -e "\e[35m=>\e[0m \e[33m\ue235\e[0m Pyfiles Creados"
     make_pyfiles
 }
